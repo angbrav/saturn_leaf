@@ -1,0 +1,15 @@
+%% -*- erlang -*-
+{application, saturn_leaf,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  riak_core,
+                  lager
+                 ]},
+  {mod, { saturn_leaf_app, []}},
+  {env, []}
+ ]}.
