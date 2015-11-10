@@ -3,7 +3,6 @@
 deps/*
 ebin/*
 Misc/
-apps/
 rel/saturn_leaf
 dev
 apps/antidote/src/*
@@ -18,4 +17,3 @@ doc/
 log/
 tags
 rel/vars/*.config
-apps/saturn_leaf/ebin
