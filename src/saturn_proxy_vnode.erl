@@ -2,6 +2,10 @@
 -behaviour(riak_core_vnode).
 -include("saturn_leaf.hrl").
 
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([start_vnode/1,
          init/1,
          terminate/2,
@@ -220,7 +224,7 @@ if_safe_read(ClientId, Key, _S0=#state{buffer=Buffer}) ->
     case dict:find(ClientId, Buffer) of
         {ok, Queue} ->
             List = lists:foldl(fun(Update, List0) ->
-                                {UId, {KeyUpdate, _Value}} = Update,
+                                {UId, KeyUpdate, _Value} = Update,
                                 case KeyUpdate of
                                     Key ->
                                         List0 ++ [UId];
@@ -248,3 +252,36 @@ buffer_update(UId, Key, Value, S0=#state{buffer=Buffer0}) ->
     end,
     Buffer1 = dict:store(ClientId, Queue1, Buffer0),
     S0#state{buffer=Buffer1}.
+
+-ifdef(TEST).
+if_safe_read_test() ->
+    ClientId1 = clientid1,
+    Key=3,
+    Q1 = queue:in({1, Key, value}, queue:new()),
+    Q2 = queue:in({2, 2, value}, Q1),
+    Q3 = queue:in({3, Key, value}, Q2),
+    D1 = dict:store(ClientId1, Q3, dict:new()),
+    ?assertEqual({false, [1,3]}, if_safe_read(ClientId1, Key, #state{buffer=D1})),
+    ?assertEqual({false, [2]}, if_safe_read(ClientId1, 2, #state{buffer=D1})),
+    ?assertEqual(true, if_safe_read(ClientId1, 4, #state{buffer=D1})),
+    ?assertEqual(true, if_safe_read(cid2, 4, #state{buffer=D1})).
+
+buffer_update_test() ->
+    UId1 = {client1, 2},
+    UId2 = {client2, 5},
+    %Test: Add operation to a client already in the buffer
+    D1 = dict:store(client1, queue:in(whatever, queue:new()), dict:new()),
+    #state{buffer=D2} = buffer_update(UId1, 4, 5, #state{buffer=D1}),
+    {{value, Elem1}, Queue2}  = queue:out(dict:fetch(client1, D2)),
+    ?assertEqual(whatever, Elem1),
+    {{value, Elem2}, Queue3}  = queue:out(Queue2),
+    ?assertEqual({UId1, 4, 5}, Elem2),
+    ?assertEqual(true, queue:is_empty(Queue3)),
+
+    %Test: Add operation to a client not present in the pbuffer
+    #state{buffer=D3} = buffer_update(UId2, 4, 5, #state{buffer=D2}),
+    {{value, Elem3}, Queue4}  = queue:out(dict:fetch(client2, D3)),
+    ?assertEqual({UId2, 4, 5}, Elem3),
+    ?assertEqual(true, queue:is_empty(Queue4)).
+
+-endif.

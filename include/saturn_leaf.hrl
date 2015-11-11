@@ -6,6 +6,8 @@
 
 -define(GROUPSFILE, whatever).
 -define(TREEFILE, whatever).
+-define(TREEFILE_TEST, "../include/tree_file_test.saturn").
+-define(GROUPSFILE_TEST, "../include/groups_file_test.saturn").
 
 -define(BACKEND, simple_backend).
 -define(BACKEND_CONNECTOR_FSM, simple_backend_connector_fsm).

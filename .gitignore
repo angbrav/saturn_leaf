@@ -2,7 +2,7 @@
 .eunit
 deps/*
 ebin/*
-Misc/
+misc/
 rel/saturn_leaf
 dev
 apps/antidote/src/*

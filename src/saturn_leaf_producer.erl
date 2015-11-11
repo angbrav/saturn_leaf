@@ -1,5 +1,12 @@
 -module(saturn_leaf_producer).
 -behaviour(gen_server).
+
+-include("saturn_leaf.hrl").
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
@@ -56,7 +63,7 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
                                                                 end), 
     Length = length(Upstream0),
     case Index of
-        1 ->
+        {ok, 1} ->
             Upstream1 = lists:nthtail(1, Upstream0),
             {Stream0, Upstream2} = generate_labels(Upstream1, [Clock]), 
             case saturn_groups_manager:filter_stream_leaf(Stream0) of
@@ -65,10 +72,13 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
                 {ok, Stream1, {Host, Port}} ->
                     propagation_fsm_sup:start_fsm(Port, Host, {new_stream, Stream1})
             end;
-        Length ->
+        {ok, Length} ->
             Upstream2 = lists:droplast(Upstream0) ++ {Clock, unblocked};
-        _ ->
-            Upstream2 = lists:sublist(Upstream0, Index-1) ++ [Clock, unblocked] ++ lists:nthtail(Index, Upstream0)
+        {ok, _} ->
+            Upstream2 = lists:sublist(Upstream0, Index-1) ++ [Clock, unblocked] ++ lists:nthtail(Index, Upstream0);
+        {error, not_found} ->
+            Upstream2 = Upstream0,
+            lager:error("Binary search could not find the element")
     end,
     {noreply, S0#state{upstream=Upstream2}};
 
@@ -92,5 +102,17 @@ generate_labels([H|T], Acc) ->
         {Clock, unblocked} ->
             generate_labels(T, Acc ++ [Clock]);
         _ ->
-            {Acc, T}
+            {Acc, [H|T]}
     end.
+
+-ifdef(TEST).
+
+generate_labels_test() ->
+    List1 = [{1, unblocked},{2, unblocked},{3, blocked},{4, unblocked}],
+    ?assertEqual({[1,2], [{3, blocked},{4, unblocked}]}, generate_labels(List1, [])),
+    List2 = [{1, blocked},{2, unblocked},{3, blocked},{4, unblocked}],
+    ?assertEqual({[], List2}, generate_labels(List2, [])),
+    List3 = [{1, unblocked},{2, unblocked},{3, unblocked},{4, unblocked}],
+    ?assertEqual({[1,2,3,4], []}, generate_labels(List3, [])).
+
+-endif.

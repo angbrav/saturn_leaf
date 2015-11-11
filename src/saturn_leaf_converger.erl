@@ -2,6 +2,11 @@
 -behaviour(gen_server).
 
 -include("saturn_leaf.hrl").
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
+
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
@@ -77,8 +82,8 @@ code_change(_OldVsn, State, _Extra) ->
 
 check_match(Label, _S0=#state{ops_dict=Ops0}) ->
     case dict:find(Label, Ops0) of
-        {ok, Operation} ->
+        {ok, {Key, Value}} ->
             {Clock, _} = Label,
             ok = saturn_leaf_producer:new_clock(Clock),
-            riak_update_fsm_sup:start_child([propagation, Label, Operation])
+            ?BACKEND_CONNECTOR_FSM:start_fsm([propagation, {Key, Value, Label}])
     end.

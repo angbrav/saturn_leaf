@@ -59,8 +59,8 @@ init([]) ->
         {error, Reason} ->
             lager:error("Problem reading ~p file, reason: ~p", [?TREEFILE, Reason]),
             S1 = #state{groups=RGroups, paths=dict:new(), tree=dict:new(), nleaves=0};
-        Line ->
-            {NLeaves, []} = string:to_integer(Line),
+        {ok, Line} ->
+            {NLeaves, []} = string:to_integer(hd(string:tokens(Line, "\n"))),
             {Tree, Paths} = tree_from_file(TreeFile, 0, NLeaves, dict:new(), dict:new()),
             S1 = #state{groups=RGroups, paths=Paths, tree=Tree, nleaves=NLeaves}
     end,
@@ -183,11 +183,13 @@ interested(Id, Key, PreId, S0=#state{groups=RGroups, nleaves=NLeaves, paths=Path
             intersect(LinksExpanded, Group)
     end.
             
+expand_links([], _PreId, _S0) ->
+    [];
                
 expand_links([H|T], PreId, S0=#state{nleaves=NLeaves, paths=Paths}) ->
     case is_leaf(H, NLeaves) of
         true ->
-            H ++ expand_links(T, PreId, S0);
+            [H] ++ expand_links(T, PreId, S0);
         false ->
             ExtraPath = dict:fetch(H, Paths),
             FilteredExtraPath = lists:foldl(fun(Elem, Acc) ->
@@ -196,7 +198,7 @@ expand_links([H|T], PreId, S0=#state{nleaves=NLeaves, paths=Paths}) ->
                                                 _ -> Acc ++ [Elem]
                                             end 
                                            end, [], ExtraPath),
-            expand_links(FilteredExtraPath, H, S0) ++ expand_links(T, S0, PreId)
+            expand_links(FilteredExtraPath, H, S0) ++ expand_links(T, PreId, S0)
     end.
 
 intersect([], _List2) ->
@@ -228,13 +230,13 @@ replication_groups_from_file(Device, Dict0)->
         {error, Reason} ->
             lager:error("Problem reading ~p file, reason: ~p", [?GROUPSFILE, Reason]),
             Dict0;
-        Line ->
-            [H|T] = string:tokens(Line, "x,"),
+        {ok, Line} ->
+            [H|T] = string:tokens(hd(string:tokens(Line,"\n")), ","),
             ReplicationGroup = lists:foldl(fun(Elem, Acc) ->
                                             {Int, []} = string:to_integer(Elem),
                                             Acc ++ [Int]
                                            end, [], T),
-            {Key, []} = string:string_to_integer(H),
+            {Key, []} = string:to_integer(H),
             Dict1 = dict:store(Key, ReplicationGroup, Dict0),
             replication_groups_from_file(Device, Dict1)
     end.
@@ -246,8 +248,8 @@ tree_from_file(Device, Counter, LeavesLeft, Tree0, Path0)->
         {error, Reason} ->
             lager:error("Problem reading ~p file, reason: ~p", [?TREEFILE, Reason]),
             {Tree0, Path0};
-        Line ->
-            List = string:tokens(Line, ","),
+        {ok, Line} ->
+            List = string:tokens(hd(string:tokens(Line, "\n")), ","),
             Latencies = lists:foldl(fun(Elem, Acc) ->
                                             {Int, []} = string:to_integer(Elem),
                                             Acc ++ [Int]
@@ -255,7 +257,7 @@ tree_from_file(Device, Counter, LeavesLeft, Tree0, Path0)->
             Tree1 = dict:store(Counter, Latencies, Tree0),
             case LeavesLeft of
                 0 ->
-                    {OneHopPath, _} = lists:foldf(fun(Elem, {Acc, C}) ->
+                    {OneHopPath, _} = lists:foldl(fun(Elem, {Acc, C}) ->
                                                     {Int, []} = string:to_integer(Elem),
                                                     case Int of
                                                         -1 ->
@@ -288,21 +290,81 @@ find_internal([H|T], Counter, NLeaves) ->
     end.
 
 -ifdef(TEST).
+interested_test() ->
+    P1 = dict:store(6,[0,1,7],dict:new()),
+    P2 = dict:store(7,[2,6,10],P1),
+    P3 = dict:store(8,[3,9,10],P2),
+    P4 = dict:store(9,[4,5,8],P3),
+    P5 = dict:store(10,[7,8],P4),
+    Groups = dict:store(3, [0,1,3], dict:new()),
+    ?assertEqual(true, interested(0, 3, 6, #state{groups=Groups, nleaves=6, paths=P5})),
+    ?assertEqual(false, interested(2, 3, 7, #state{groups=Groups, nleaves=6, paths=P5})),
+    ?assertEqual(true, interested(7, 3, 10, #state{groups=Groups, nleaves=6, paths=P5})),
+    ?assertEqual(false, interested(9, 3, 8, #state{groups=Groups, nleaves=6, paths=P5})).
+    
 
-%tree_from_file_test() ->
-%    {ok, TreeFile} = file:open(?TREEFILE_TEST, [read]),
-%    case file:read_line(TreeFile) of
-%        eof ->
-%            Result = eof;
-%        {error, Reason} ->
-%            Result = error;
-%        Line ->
-%            {NLeaves, []} = string:to_integer(Line),
-%            {Tree, Paths} = tree_from_file(TreeFile, 0, NLeaves, dict:new(), dict:new()),
-%            S1 = #state{groups=RGroups, paths=Paths, tree=Tree, nleaves=NLeaves}
-%    end,
-%    file:close(TreeFile),
+expand_links_test() ->
+    P1 = dict:store(6,[0,1,7],dict:new()),
+    P2 = dict:store(7,[2,6,10],P1),
+    P3 = dict:store(8,[3,9,10],P2),
+    P4 = dict:store(9,[4,5,8],P3),
+    P5 = dict:store(10,[7,8],P4),
+    Result1 = expand_links([6], 0, #state{nleaves=6, paths=P5}),
+    ?assertEqual([1,2,3,4,5], lists:sort(Result1)),
+    Result2 = expand_links([7], 2, #state{nleaves=6, paths=P5}),
+    ?assertEqual([0,1,3,4,5], lists:sort(Result2)),
+    Result3 = expand_links([7,8], 10, #state{nleaves=6, paths=P5}),
+    ?assertEqual([0,1,2,3,4,5], lists:sort(Result3)),
+    Result4 = expand_links([7], 10, #state{nleaves=6, paths=P5}),
+    ?assertEqual([0,1,2], lists:sort(Result4)).
 
+intersect_test() ->
+    ?assertEqual(true, intersect([1,4,5], [1,2,3])),
+    ?assertEqual(true, intersect([4,1,5], [1,2,3])),
+    ?assertEqual(true, intersect([4,6,3], [1,2,3])),
+    ?assertEqual(false, intersect([4,6,7], [1,2,3])),
+    ?assertEqual(false, intersect([], [])),
+    ?assertEqual(false, intersect([1], [2,3])),
+    ?assertEqual(true, intersect([1], [2,1])).
+
+contains_test() ->
+    ?assertEqual(true, contains(1, [1,2,3])),
+    ?assertEqual(false, contains(0, [1,2,3])),
+    ?assertEqual(false, contains(0, [])).
+
+replication_groups_from_file_test() ->
+    {ok, GroupsFile} = file:open(?GROUPSFILE_TEST, [read]),
+    RGroups = replication_groups_from_file(GroupsFile, dict:new()),
+    file:close(GroupsFile),
+    ?assertEqual(3,length(dict:fetch_keys(RGroups))),
+    ?assertEqual([1,2],dict:fetch(0, RGroups)),
+    ?assertEqual([2,3],dict:fetch(1, RGroups)),
+    ?assertEqual([3,4],dict:fetch(2, RGroups)).
+
+tree_from_file_test() ->
+    {ok, TreeFile} = file:open(?TREEFILE_TEST, [read]),
+    case file:read_line(TreeFile) of
+        eof ->
+            eof;
+        {error, _Reason} ->
+            error;
+        {ok, Line} ->
+            {NLeaves, []} = string:to_integer(hd(string:tokens(Line, "\n"))),
+            {Tree, Paths} = tree_from_file(TreeFile, 0, NLeaves, dict:new(), dict:new()),
+            ?assertEqual(3, NLeaves),
+
+            ?assertEqual(2,length(dict:fetch_keys(Paths))),
+            ?assertEqual([0,1,4],dict:fetch(3, Paths)),
+            ?assertEqual([2,3],dict:fetch(4, Paths)),
+
+            ?assertEqual(5,length(dict:fetch_keys(Tree))),
+            ?assertEqual([-1,1,2,3,-1],dict:fetch(0, Tree)),
+            ?assertEqual([4,-1,5,6,-1],dict:fetch(1, Tree)),
+            ?assertEqual([7,8,-1,-1,9],dict:fetch(2, Tree)),
+            ?assertEqual([10,11,-1,-1,12],dict:fetch(3, Tree)),
+            ?assertEqual([-1,-1,13,14,-1],dict:fetch(4, Tree))
+    end,
+    file:close(TreeFile).
 
 is_leaf_test() ->
     ?assertEqual(true, is_leaf(3, 4)),
