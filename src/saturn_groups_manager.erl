@@ -65,7 +65,7 @@ init([]) ->
             S1 = #state{groups=RGroups, paths=Paths, tree=Tree, nleaves=NLeaves}
     end,
     file:close(TreeFile),
-    {ok, S1}.
+    {ok, S1#state{map=dict:new()}}.
 
 handle_call({set_myid, MyId}, _From, S0) ->
     {reply, ok, S0#state{myid=MyId}};
@@ -101,7 +101,10 @@ handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid
                                         MyId ->
                                             Acc;
                                         _ ->
-                                            Acc ++ [dict:fecth(Id, Map)]
+                                            case dict:find(Id, Map) of
+                                                {ok, Value} -> Acc ++ [Value];
+                                                error -> Acc
+                                            end
                                     end
                                 end, [], Value),
             {reply, {ok, Group}, S0};
@@ -109,7 +112,7 @@ handle_call({get_datanodes, Key}, _From, S0=#state{groups=RGroups, map=Map, myid
             {reply, {error, unknown_key}, S0}
     end;
 
-handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId}) ->
+handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=NLeaves, myid=MyId, map=Map}) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun(Elem, Acc) ->
@@ -121,7 +124,13 @@ handle_call({filter_stream_leaf, Stream0}, _From, S0=#state{tree=Tree, nleaves=N
                                     Acc
                             end
                           end, [], Stream0),
-    {reply, {ok, Stream1, Internal}, S0};
+    IndexNode = case dict:find(Internal, Map) of
+                    {ok, Value} -> Value;
+                    error ->
+                        lager:error("The id: ~p is not in the map ~p",[Internal, dict:fetch_keys(Map)]),
+                        no_indexnode
+                end,
+    {reply, {ok, Stream1, IndexNode}, S0};
 
 handle_call({get_metadatanodes, Key}, _From, S0=#state{groups=_RGroups, map=Map, tree=Tree, paths=Paths, nleaves=NLeaves, myid=MyId}) ->
     Row = dict:fetch(MyId, Tree),
@@ -130,7 +139,7 @@ handle_call({get_metadatanodes, Key}, _From, S0=#state{groups=_RGroups, map=Map,
             Internal = find_internal(Row, 0, NLeaves),
             case interested(Internal, Key, MyId, S0) of
                 true ->
-                    {reply, {ok, dict:fecth(Internal, Map)}, S0};
+                    {reply, {ok, dict:fetch(Internal, Map)}, S0};
                 false ->
                     {reply, {ok, []}, S0}
             end;
@@ -144,8 +153,11 @@ handle_call({get_metadatanodes, Key}, _From, S0=#state{groups=_RGroups, map=Map,
                                        end, [], Links),
             Group = lists:foldl(fun(Id, Acc) ->
                                     case interested(Id, Key, MyId, S0) of
-                                        true -> 
-                                            Acc ++ [dict:fecth(Id, Map)];
+                                        true ->
+                                            case dict:find(Id, Map) of
+                                                {ok, Value} -> Acc ++ [Value];
+                                                error -> Acc
+                                            end;
                                         false ->
                                             Acc
                                     end

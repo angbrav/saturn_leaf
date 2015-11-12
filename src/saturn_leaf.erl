@@ -18,13 +18,13 @@ ping() ->
     riak_core_vnode_master:sync_spawn_command(IndexNode, ping, ?PROXY_MASTER).
 
 update(ClientId, Key, Value) ->
-    DocIdx = riak_core_util:chash_key(ClientId),
+    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:update(IndexNode, ClientId, Key, Value).
     
 read(ClientId, Key) ->
-    DocIdx = riak_core_util:chash_key(ClientId),
+    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:read(IndexNode, ClientId, Key).

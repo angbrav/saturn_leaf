@@ -1,89 +1,86 @@
 REBAR = $(shell pwd)/rebar
+.PHONY: rel deps test
 
-.PHONY: deps rel stagedevrel
+all: deps compile test compile-riak-test
 
-all: deps compile test
-
-compile:
+compile: deps
 	$(REBAR) compile
+
+compile-riak-test: compile
+	$(REBAR) skip_deps=true riak_test_compile
 
 deps:
 	$(REBAR) get-deps
 
 clean:
 	$(REBAR) clean
+	rm -rf riak_test/ebin
 
-distclean: clean devclean relclean
+cleantests:
+	rm -rf riak_test/ebin
+
+distclean: clean devclean relclean cleanplt
 	$(REBAR) delete-deps
-
-test:
-	$(REBAR) skip_deps=true eunit
 
 rel: all
 	$(REBAR) generate
 
+relnocert: export NO_CERTIFICATION = true
+relnocert: relclean cleantests rel
+
 relclean:
 	rm -rf rel/saturn_leaf
 
-devrel: dev1 dev2 dev3
+stage : rel
+	$(foreach dep,$(wildcard deps/*), rm -rf rel/saturn_leaf/lib/$(shell basename $(dep))-* && ln -sf $(abspath $(dep)) rel/saturn_leaf/lib;)
+	$(foreach app,$(wildcard apps/*), rm -rf rel/saturn_leaf/lib/$(shell basename $(app))-* && ln -sf $(abspath $(app)) rel/saturn_leaf/lib;)
 
-###
-### Docs
-###
-docs:
-	$(REBAR) skip_deps=true doc
+currentdevrel: stagedevrel compile-riak-test
+	riak_test/bin/saturnleaf-current.sh
+
+riak-test: currentdevrel
+	$(foreach dep,$(wildcard riak_test/*.erl), ../riak_test/riak_test -v -c saturn_leaf -t $(dep);)
+
+stage-riak-test: all
+	$(foreach dep,$(wildcard riak_test/*.erl), ../riak_test/riak_test -v -c saturn_leaf -t $(dep);)
 
 ##
 ## Developer targets
 ##
+##  devN - Make a dev build for node N
+##  stagedevN - Make a stage dev build for node N (symlink libraries)
+##  devrel - Make a dev build for 1..$DEVNODES
+##  stagedevrel Make a stagedev build for 1..$DEVNODES
+##
+##  Example, make a 68 node devrel cluster
+##    make stagedevrel DEVNODES=68
 
-stage : rel
-	$(foreach dep,$(wildcard deps/* wildcard apps/*), rm -rf rel/saturn_leaf/lib/$(shell basename $(dep))-* && ln -sf $(abspath $(dep)) rel/saturn_leaf/lib;)
+.PHONY : stagedevrel devrel
 
+DEVNODES ?= 3
 
-stagedevrel: dev1 dev2 dev3
-	$(foreach dev,$^,\
-	  $(foreach dep,$(wildcard deps/* wildcard apps/*), rm -rf dev/$(dev)/lib/$(shell basename $(dep))-* && ln -sf $(abspath $(dep)) dev/$(dev)/lib;))
+# 'seq' is not available on all *BSD, so using an alternate in awk
+SEQ = $(shell awk 'BEGIN { for (i = 1; i < '$(DEVNODES)'; i++) printf("%i ", i); print i ;exit(0);}')
 
-devrel: dev1 dev2 dev3
+$(eval stagedevrel : $(foreach n,$(SEQ),stagedev$(n)))
+$(eval devrel : $(foreach n,$(SEQ),dev$(n)))
 
+dev% : all
+	mkdir -p dev
+	rel/gen_dev $@ rel/vars/dev_vars.config.src rel/vars/$@_vars.config
+	(cd rel && $(REBAR) generate target_dir=../dev/$@ overlay_vars=vars/$@_vars.config)
 
-devclean:
+stagedev% : dev%
+	  $(foreach dep,$(wildcard deps/*), rm -rf dev/$^/lib/$(shell basename $(dep))* && ln -sf $(abspath $(dep)) dev/$^/lib;)
+	  $(foreach app,$(wildcard apps/*), rm -rf dev/$^/lib/$(shell basename $(app))* && ln -sf $(abspath $(app)) dev/$^/lib;)
+
+devclean: clean
 	rm -rf dev
 
-dev1 dev2 dev3: all
-	mkdir -p dev
-	(cd rel && $(REBAR) generate target_dir=../dev/$@ overlay_vars=vars/$@.config)
+DIALYZER_APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
+	xmerl webtool eunit syntax_tools compiler mnesia public_key snmp
 
+include tools.mk
 
-##
-## Dialyzer
-##
-APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
-	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
-COMBO_PLT = $(HOME)/.saturn_leaf_combo_dialyzer_plt
-
-check_plt: deps compile
-	dialyzer --check_plt --plt $(COMBO_PLT) --apps $(APPS) \
-		deps/*/ebin apps/*/ebin
-
-build_plt: deps compile
-	dialyzer --build_plt --output_plt $(COMBO_PLT) --apps $(APPS) \
-		deps/*/ebin apps/*/ebin
-
-dialyzer: deps compile
-	@echo
-	@echo Use "'make check_plt'" to check PLT prior to using this target.
-	@echo Use "'make build_plt'" to build PLT prior to using this target.
-	@echo
-	@sleep 1
-	dialyzer -Wno_return --plt $(COMBO_PLT) deps/*/ebin apps/*/ebin
-
-
-cleanplt:
-	@echo
-	@echo "Are you sure?  It takes about 1/2 hour to re-build."
-	@echo Deleting $(COMBO_PLT) in 5 seconds.
-	@echo
-	sleep 5
-	rm $(COMBO_PLT)
+typer:
+	typer --annotate -I ../ --plt $(PLT) -r src

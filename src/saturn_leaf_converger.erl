@@ -21,23 +21,37 @@ start_link() ->
     gen_server:start({global, ?MODULE}, ?MODULE, [], []).
 
 handle(Message) ->
-    gen_server:call(?MODULE, Message, infinity).
+    gen_server:call({global, ?MODULE}, Message, infinity).
 
 notify_update(Label) ->
-    gen_server:cast(?MODULE, {update_completed, Label}).
+    gen_server:cast({global, ?MODULE}, {update_completed, Label}).
 
 init([]) ->
     {ok, #state{labels_queue=queue:new(),
                 ops_dict=dict:new()}}.
 
 handle_call({new_stream, Stream}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
-    case length(Labels0) of
+    case queue:len(Labels0) of
         0 ->
             [Label|_Tail] = Stream,
-            check_match(Label, S0)
+            check_match(Label, S0);
+        _ ->
+            noop
     end,
-    Labels1 = queue:join(Labels0, Stream),
-    {reply, ok, S0#state{labels_queue=Labels1}}.
+    Labels1 = queue:join(Labels0, queue:from_list(Stream)),
+    {reply, ok, S0#state{labels_queue=Labels1}};
+
+handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
+    Ops1 = dict:store(Label, {Key, Value}, Ops0),
+    case queue:peek(Labels0) of
+        {value, Label} ->
+            {Key, Clock, _} = Label,
+            ok = saturn_leaf_producer:new_clock(Clock),
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label});
+        _ ->
+            noop
+    end,
+    {reply, ok, S0#state{ops_dict=Ops1}}.
 
 handle_cast({update_completed, Label}, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
     case queue:peek(Labels0) of
@@ -47,7 +61,9 @@ handle_cast({update_completed, Label}, S0=#state{labels_queue=Labels0, ops_dict=
             S1 = S0#state{labels_queue=Labels1, ops_dict=Ops1},
             case queue:peek(Labels1) of
                 {value, NextLabel} ->
-                    check_match(NextLabel, S1)
+                    check_match(NextLabel, S1);
+                _ ->
+                    noop
             end,
             {noreply, S1};
         {value, _} ->
@@ -57,16 +73,6 @@ handle_cast({update_completed, Label}, S0=#state{labels_queue=Labels0, ops_dict=
             lager:error("Empty queue"),
             {noreply, S0}
     end;
-
-handle_cast({new_operation, Label, Key, Value}, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
-    Ops1 = dict:store(Label, {Key, Value}, Ops0),
-    case queue:peek(Labels0) of
-        {value, Label} ->
-            {Clock, _} = Label,
-            ok = saturn_leaf_producer:new_clock(Clock),
-            ?BACKEND_CONNECTOR_FSM:start_fsm([propagation, {Key, Value, Label}])
-    end,
-    {noreply, S0#state{ops_dict=Ops1}};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -83,7 +89,9 @@ code_change(_OldVsn, State, _Extra) ->
 check_match(Label, _S0=#state{ops_dict=Ops0}) ->
     case dict:find(Label, Ops0) of
         {ok, {Key, Value}} ->
-            {Clock, _} = Label,
+            {Key, Clock, _} = Label,
             ok = saturn_leaf_producer:new_clock(Clock),
-            ?BACKEND_CONNECTOR_FSM:start_fsm([propagation, {Key, Value, Label}])
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label});
+        _ ->
+            noop
     end.

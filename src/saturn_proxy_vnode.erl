@@ -24,7 +24,8 @@
 -export([read/3,
          update/4,
          new_label/5,
-         notify_update/3]).
+         notify_update/3,
+         check_tables_ready/0]).
 
 -record(state, {partition,
                 seq :: non_neg_integer(),
@@ -64,34 +65,55 @@ init([Partition]) ->
                  label_uid=dict:new(),
                  buffer=dict:new()}}.
 
+%% @doc The table holding the prepared transactions is shared with concurrent
+%%      readers, so they can safely check if a key they are reading is being updated.
+%%      This function checks whether or not all tables have been intialized or not yet.
+%%      Returns true if the have, false otherwise.
+check_tables_ready() ->
+    {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
+    PartitionList = chashbin:to_list(CHBin),
+    check_table_ready(PartitionList).
+
+
+check_table_ready([]) ->
+    true;
+check_table_ready([{Partition, Node} | Rest]) ->
+    Result = riak_core_vnode_master:sync_command({Partition, Node},
+        {check_tables_ready},
+        ?PROXY_MASTER,
+        infinity),
+    case Result of
+        true ->
+            check_table_ready(Rest);
+        false ->
+            false
+    end.
+
+handle_command({check_tables_ready}, _Sender, SD0) ->
+    {reply, true, SD0};
+
 handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0, seq=Seq0}) ->
     Seq1 = Seq0 + 1,
     UId = {ClientId, Seq1},
     S1=S0#state{seq=Seq1},
     case if_safe_read(ClientId, Key, S1) of
         true ->
-            ?BACKEND_CONNECTOR_FSM:start_fsm([read, {Key, From}]),
+            ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
             {noreply, S1};
         {false, ConflictingUpdates} ->
             DReadsUId1 = lists:foldl(fun(ConflictingUId, Dict) ->
-                                        case dict:find(ConflictingUId, Dict) of
-                                           {ok, List0} ->
-                                               List1 =  List0 ++ [UId];
-                                           error ->
-                                               List1 = [UId]
-                                        end,
-                                        dict:store(ConflictingUId, List1, Dict)
+                                        dict:append(ConflictingUId, UId, Dict)
                                      end, DReadsUId0, ConflictingUpdates),
             DReadsCounters1 = dict:store(UId, {length(ConflictingUpdates), From, Key}, DReadsCounters0),
             {noreply, S1#state{dreads_counters=DReadsCounters1, dreads_uid=DReadsUId1}}
     end;
 
-handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0}) ->
+handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition}) ->
     Seq1 = Seq0 + 1,
     UId = {ClientId, Seq1},
     S1=S0#state{seq=Seq1},
     S2 = buffer_update(UId, Key, Value, S1),
-    saturn_leaf_producer:generate_label(UId, Key, Value),
+    saturn_leaf_producer:generate_label({Partition, node()}, UId, Key, Value),
     {reply, ok, S2};
 
 handle_command({new_label, UId, Label, Key, Value}, _From, S0=#state{dreads_uid=_DReadsUId0, dreads_counters=_DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
@@ -107,78 +129,25 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S0=#state{dreads_uid=
     case dict:find(ClientId, Buffer0) of
         {ok, Queue} ->
             case queue:peek(Queue) of
-                {UId, _} ->
-                    ?BACKEND_CONNECTOR_FSM:start_fsm([update, {Key, Value, Label, UId, {Partition, node()}}]);
-                _ ->
+                {value, {UId, _, _}} ->
+                    lager:info("Label received"),
+                    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, Label, UId, {Partition, node()}}),
+                    {noreply, S0};
+                _Other ->
                     LabelUId1 = dict:store(UId, Label, LabelUId0),
                     {noreply, S0#state{label_uid=LabelUId1}}
             end;
         error ->
-            lager:error("There should be at least one entry in the queue")
-    end;
-
-handle_command({update_completed, UId, Label}, _From, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
-    {ClientId, _} = UId,
-    saturn_leaf_producer:unblock_label(Label),
-    case dict:find(UId, DReadsUId0) of
-        {ok, ListReads} ->
-            DReadsUId1 = dict:erase(UId, DReadsUId0),
-            DReadsCounters1 = lists:foldl(fun(ReadUId, Dict) ->
-                                            case Dict of
-                                                error ->
-                                                    error;
-                                                _ ->
-                                                    case dict:find(ReadUId, Dict) of
-                                                        {ok, {Counter, From, Key}} ->
-                                                            case Counter of
-                                                                1 ->
-                                                                    ?BACKEND_CONNECTOR_FSM:start_fsm([read, {Key, From}]),
-                                                                    dict:erase(ReadUId, Dict);
-                                                                _ ->
-                                                                    dict:store(ReadUId, {Counter-1, From, Key}, Dict)
-                                                            end;
-                                                        error ->
-                                                            error
-                                                    end
-                                            end
-                                          end, DReadsCounters0, ListReads),
-            case DReadsCounters1 of
-                error ->
-                    lager:error("Error of consistency between dreads_uid and dreads_counters"),
-                    {noreply, S0};
-                _ ->
-                    case dict:find(ClientId, Buffer0) of
-                        {ok, Queue0} ->
-                            case queue:peek(Queue0) of
-                                {UId, _} ->
-                                    Queue1 = queue:drop(Queue0),
-                                    case queue:is_empty(Queue1) of
-                                        false ->
-                                            {UIdNext, Key, Value} = queue:peek(Queue1),
-                                            case dict:find(UIdNext, LabelUId0) of
-                                                Label ->
-                                                    ?BACKEND_CONNECTOR_FSM:start_fsm([update, {Key, Value, Label, UIdNext, {Partition, node()}}]),
-                                                    LabelUId1 = dict:erase(UIdNext, LabelUId0),
-                                                    {noreply, S0#state{dreads_uid=DReadsUId1, dreads_counters=DReadsCounters1, label_uid=LabelUId1}};
-                                                error ->
-                                                    {noreply, S0#state{dreads_uid=DReadsUId1, dreads_counters=DReadsCounters1}}
-                                            end;
-                                        true ->
-                                            {noreply, S0#state{dreads_uid=DReadsUId1, dreads_counters=DReadsCounters1}}
-                                    end;
-                                _ ->
-                                    lager:error("Entry in the queue does not match the recently executed operation"),
-                                    {noreply, S0}
-                            end;
-                        error ->
-                            lager:error("There should be at least one entry in the queue"),
-                            {noreply, S0}
-                    end
-            end;
-        error ->
-            lager:error("Executed update is not in the delayes updates mapped by uid data dict"),
+            lager:error("There should be at least one entry in the queue"),
             {noreply, S0}
     end;
+
+handle_command({update_completed, UId, Label}, _From, S0) ->
+    saturn_leaf_producer:unblock_label(Label),
+    S1 = process_buffer(UId, S0),
+    S2 = process_pending_reads(UId, S1),
+    {noreply, S2};
+
 %% Sample command: respond to a ping
 handle_command(ping, _Sender, State) ->
     {reply, {pong, State#state.partition}, State};
@@ -219,6 +188,72 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0}) ->
+    case dict:find(UId, DReadsUId0) of
+        {ok, ListReads} ->
+            DReadsUId1 = dict:erase(UId, DReadsUId0),
+            DReadsCounters1 = lists:foldl(fun(ReadUId, Dict) ->
+                                            case Dict of
+                                                error ->
+                                                    error;
+                                                _ ->
+                                                    case dict:find(ReadUId, Dict) of
+                                                        {ok, {Counter, From, Key}} ->
+                                                            case Counter of
+                                                                1 ->
+                                                                    ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
+                                                                    dict:erase(ReadUId, Dict);
+                                                                _ ->
+                                                                    dict:store(ReadUId, {Counter-1, From, Key}, Dict)
+                                                            end;
+                                                        error ->
+                                                            error
+                                                    end
+                                            end
+                                          end, DReadsCounters0, ListReads),
+            case DReadsCounters1 of
+                error ->
+                    lager:error("Error of consistency between dreads_uid and dreads_counters"),
+                    S0;
+                _ ->
+                    S0#state{dreads_uid=DReadsUId1, dreads_counters=DReadsCounters1}
+            end;
+        error ->
+            lager:info("No reads waiting for uid: ~p", [UId]),
+            S0
+    end.
+
+process_buffer(UId, S0=#state{buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
+    {ClientId, _} = UId,
+    case dict:find(ClientId, Buffer0) of
+        {ok, Queue0} ->
+            case queue:peek(Queue0) of
+                {value, {UId, _, _}} ->
+                    Queue1 = queue:drop(Queue0),
+                    case queue:is_empty(Queue1) of
+                        false ->
+                            Buffer1 = dict:store(ClientId, Queue1, Buffer0),
+                            {value, {UIdNext, Key, Value}} = queue:peek(Queue1),
+                            case dict:find(UIdNext, LabelUId0) of
+                                {ok, Label} ->
+                                    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, Label, UIdNext, {Partition, node()}}),
+                                    LabelUId1 = dict:erase(UIdNext, LabelUId0),
+                                    S0#state{buffer=Buffer1, label_uid=LabelUId1};
+                                error ->
+                                    S0#state{buffer=Buffer1}
+                            end;
+                        true ->
+                            Buffer1 = dict:erase(ClientId, Buffer0),
+                            S0#state{buffer=Buffer1}
+                    end;
+                Other ->
+                    lager:error("Entry in the queue does not match the recently executed operation or is empty: ~p", [Other]),
+                    S0
+            end;
+        error ->
+            lager:error("There should be at least one entry in the queue"),
+            S0
+    end.
 
 if_safe_read(ClientId, Key, _S0=#state{buffer=Buffer}) ->
     case dict:find(ClientId, Buffer) of

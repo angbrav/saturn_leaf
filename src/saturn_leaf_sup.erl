@@ -17,9 +17,6 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 start_leaf(Port) ->
-    supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, []},
-                    permanent, 5000, worker, [saturn_leaf_producer]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
                     {saturn_leaf_converger, start_link, []},
@@ -31,7 +28,11 @@ start_leaf(Port) ->
 
     supervisor:start_child(?MODULE, {tcp_connection_handler_fsm_sup,
                     {tcp_connection_handler_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [tcp_connection_handler_fsm_sup]}).
+                    permanent, 5000, supervisor, [tcp_connection_handler_fsm_sup]}),
+
+    supervisor:start_child(?MODULE, {saturn_leaf_producer,
+                    {saturn_leaf_producer, start_link, []},
+                    permanent, 5000, worker, [saturn_leaf_producer]}).
 
 %% ===================================================================
 %% Supervisor callbacks

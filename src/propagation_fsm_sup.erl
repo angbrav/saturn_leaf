@@ -14,7 +14,8 @@ start_fsm(Args) ->
     supervisor:start_child(?MODULE, Args).
 
 init([]) ->
-    Worker = {propagation_fsm,
-              {propagation_fsm, start_link, []},
-              transient, 5000, worker, [propagation_fsm]},
-    {ok, {{one_for_one, 5, 10}, Worker}}.
+    {ok, {{simple_one_for_one, 5, 10},
+      [{propagation_fsm,
+        {propagation_fsm, start_link, []},
+        transient, 5000, worker, [propagation_fsm]}]
+     }}.

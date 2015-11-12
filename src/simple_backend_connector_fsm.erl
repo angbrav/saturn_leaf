@@ -28,9 +28,9 @@ start_link(Operation, Payload) ->
 %% ===================================================================
 
 init([Operation, Payload]) ->
-    {ok, connect, #state{operation=Operation,
-                         payload=Payload
-                        }, 0}.
+    {ok, select_operation, #state{operation=Operation,
+                                  payload=Payload
+                                 }, 0}.
 
 select_operation(timeout, State=#state{operation=Operation}) ->
     case Operation of
@@ -45,8 +45,9 @@ select_operation(timeout, State=#state{operation=Operation}) ->
     end.
 
 update(timeout, State=#state{payload=Payload})->
+    lager:info("Connector received an update"),
     {Key, Value, Label, UId, VNode} = Payload,
-    DocIdx = riak_core_util:chash_key(Key),
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     ok = saturn_simple_backend_vnode:update(IndexNode, Key, Value),
@@ -55,7 +56,7 @@ update(timeout, State=#state{payload=Payload})->
 
 read(timeout, State=#state{payload=Payload})->
     {Key, Client} = Payload,
-    DocIdx = riak_core_util:chash_key(Key),
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     {ok, Value} = saturn_simple_backend_vnode:read(IndexNode, Key),
@@ -64,7 +65,7 @@ read(timeout, State=#state{payload=Payload})->
 
 propagation(timeout, State=#state{payload=Payload})->
     {Key, Value, Label} = Payload,
-    DocIdx = riak_core_util:chash_key(Key),
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     ok = saturn_simple_backend_vnode:update(IndexNode, Key, Value),
