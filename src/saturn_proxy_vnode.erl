@@ -101,6 +101,7 @@ handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dre
             ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
             {noreply, S1};
         {false, ConflictingUpdates} ->
+            lager:info("Buffering read"),
             DReadsUId1 = lists:foldl(fun(ConflictingUId, Dict) ->
                                         dict:append(ConflictingUId, UId, Dict)
                                      end, DReadsUId0, ConflictingUpdates),
@@ -191,6 +192,7 @@ terminate(_Reason, _State) ->
 process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0}) ->
     case dict:find(UId, DReadsUId0) of
         {ok, ListReads} ->
+            lager:info("Update blocking reads"),
             DReadsUId1 = dict:erase(UId, DReadsUId0),
             DReadsCounters1 = lists:foldl(fun(ReadUId, Dict) ->
                                             case Dict of
@@ -201,6 +203,7 @@ process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DRea
                                                         {ok, {Counter, From, Key}} ->
                                                             case Counter of
                                                                 1 ->
+                                                                    lager:info("Serving buffered read"),
                                                                     ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
                                                                     dict:erase(ReadUId, Dict);
                                                                 _ ->
