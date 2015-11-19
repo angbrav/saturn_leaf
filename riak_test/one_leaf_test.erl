@@ -17,19 +17,21 @@ confirm() ->
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
 
+    %% Starting servers in one node (Node1)
+    {ok, HostPort}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040]),
+
     lager:info("Waiting until vnodes are started up"),
     rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
     lager:info("Vnodes are started up"),
 
-    %% Starting servers in one node (Node1)
-    Result0=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040]),
-    ?assertMatch({ok, _}, Result0),
     
     ok = common_rt:assign_id_cluster(Cluster1, 0), 
 
+    UName = common_rt:get_uname(HostPort),
+
     read_updates_different_nodes(Cluster1),
-    converger_no_interleaving(Cluster1),
-    converger_interleaving(Cluster1),
+    converger_no_interleaving(Cluster1, UName),
+    converger_interleaving(Cluster1, UName),
 
     pass.
     
@@ -63,7 +65,7 @@ read_updates_different_nodes([Node1, Node2]) ->
     Result5=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
     ?assertMatch({ok, 5}, Result5).
 
-converger_no_interleaving([Node1, Node2])->
+converger_no_interleaving([Node1, Node2], UName)->
     lager:info("Test started: converger_no_interleaving"),
 
     Key=2,
@@ -73,7 +75,7 @@ converger_no_interleaving([Node1, Node2])->
     %% First label then data
     %% Simulate remote arrival of label {Key, Clock, Node}
     Label1 = {Key, 11, node2},
-    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label1]}]),
+    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_stream, [Label1]}]),
     ?assertMatch(ok, Result1),
     
     %% Should not read pending update
@@ -81,7 +83,7 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch({ok, empty}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label1, Key, 10}]),
+    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_operation, Label1, Key, 10}]),
     ?assertMatch(ok, Result3),
 
     %% Should read remote update
@@ -91,7 +93,7 @@ converger_no_interleaving([Node1, Node2])->
     %% First data then label
     %% Simulate remote arrival of update, to complete remote label
     Label2 = {Key, 15, node3},
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label2, Key, 20}]),
+    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_operation, Label2, Key, 20}]),
     ?assertMatch(ok, Result5),
 
     %% Should not read pending update
@@ -99,14 +101,14 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch({ok, 10}, Result6),
 
     %% Simulate remote arrival of label {Key, Clock, Node}
-    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label2]}]),
+    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_stream, [Label2]}]),
     ?assertMatch(ok, Result7),
 
     %% Should read remote update
     Result8 = eventual_read(ClientId2, Key, Node2, 20),
     ?assertMatch({ok, 20}, Result8).
 
-converger_interleaving([Node1, Node2])->
+converger_interleaving([Node1, Node2], UName)->
     lager:info("Test started: converger_interleaving"),
 
     Key=3,
@@ -118,7 +120,7 @@ converger_interleaving([Node1, Node2])->
     Label1 = {Key, 11, node2},
     Label2 = {Key, 20, node3},
 
-    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label1]}]),
+    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_stream, [Label1]}]),
     ?assertMatch(ok, Result1),
     
     %% Should not read pending update
@@ -126,7 +128,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch({ok, empty}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label2, Key, 30}]),
+    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_operation, Label2, Key, 30}]),
     ?assertMatch(ok, Result3),
 
     %% Should not read pending update
@@ -134,7 +136,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch({ok, empty}, Result4),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label1, Key, 20}]),
+    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_operation, Label1, Key, 20}]),
     ?assertMatch(ok, Result5),
 
     %% Should read remote update
@@ -142,7 +144,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch({ok, 20}, Result6),
 
     %% Simulate remote arrival of label {Key, Clock, Node}
-    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label2]}]),
+    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [UName, {new_stream, [Label2]}]),
     ?assertMatch(ok, Result7),
 
     %% Should read remote update

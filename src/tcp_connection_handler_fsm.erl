@@ -1,9 +1,9 @@
 -module(tcp_connection_handler_fsm).
 -behaviour(gen_fsm).
 
--record(state, {socket, server}).
+-record(state, {socket, server, uname}).
 
--export([start_link/2]).
+-export([start_link/3]).
 -export([init/1,
          code_change/4,
          handle_event/3,
@@ -18,23 +18,23 @@
 %% Public API
 %% ===================================================================
 
-start_link(Socket, Server) ->
-    gen_fsm:start_link(?MODULE, [Socket, Server], []).
+start_link(Socket, Server, UName) ->
+    gen_fsm:start_link(?MODULE, [Socket, Server, UName], []).
 
 
 %% ===================================================================
 %% gen_fsm callbacks
 %% ===================================================================
 
-init([Socket, Server]) ->
-    {ok, receive_message, #state{socket=Socket, server=Server},0}.
+init([Socket, Server, UName]) ->
+    {ok, receive_message, #state{socket=Socket, server=Server, uname=UName},0}.
 
 
-receive_message(timeout, State=#state{socket=Socket, server=Server}) ->
+receive_message(timeout, State=#state{socket=Socket, server=Server, uname=UName}) ->
     case gen_tcp:recv(Socket, 0) of
         {ok, Bin} ->
             Message = binary_to_term(Bin),
-            ok = Server:handle(Message),
+            ok = Server:handle(UName, Message),
             case gen_tcp:send(Socket, term_to_binary(acknowledge)) of
 			    ok ->
 			        ok;

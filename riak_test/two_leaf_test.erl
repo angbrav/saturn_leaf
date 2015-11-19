@@ -11,30 +11,53 @@ confirm() ->
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
     ]),
-    N = 2,
-    [Cluster1] = [[Node1, _Node2]] = rt:build_clusters([N]),
+    Clusters = [Cluster1, Cluster2] = rt:build_clusters([1, 1]),
 
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
+    rt:wait_until_ring_converged(Cluster2),
+
+    Node1 = hd(Cluster1),
+    Node2 = hd(Cluster2),
+
+    %% Starting servers in Node1
+    {ok, HostPort0}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040]),
+    
+    %% Starting servers in Node1
+    {ok, HostPort1}=rpc:call(Node2, saturn_leaf_sup, start_leaf, [4041]),
 
     lager:info("Waiting until vnodes are started up"),
     rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
+    rt:wait_until(hd(Cluster2),fun wait_init:check_ready/1),
     lager:info("Vnodes are started up"),
-
-    %% Starting servers in one node (Node1)
-    Result0=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040]),
-    ?assertMatch({ok, _}, Result0),
     
     ok = common_rt:assign_id_cluster(Cluster1, 0), 
+    ok = common_rt:assign_id_cluster(Cluster2, 1), 
 
-    read_updates_different_nodes(Cluster1),
-    converger_no_interleaving(Cluster1),
-    converger_interleaving(Cluster1),
+    Tree0 = dict:store(0, [-1, 300, 50], dict:new()),
+    Tree1 = dict:store(1, [300, -1, 70], Tree0),
+    Tree2 = dict:store(2, [50, 70, -1], Tree1),
+
+    Groups0 = dict:store(1, [0, 1], dict:new()),
+    Groups1 = dict:store(2, [0, 1], Groups0),
+    Groups2 = dict:store(3, [0, 1], Groups1),
+
+    ok = common_rt:set_tree_clusters(Clusters, Tree2, 2),
+    ok = common_rt:set_groups_clusters(Clusters, Groups2),
+
+    ok = common_rt:new_node_cluster(Cluster1, 1, HostPort1),
+    ok = common_rt:new_node_cluster(Cluster2, 0, HostPort0),
+
+    UNameCluster2 = common_rt:get_uname(HostPort1),
+
+    {Host1, Port1} = HostPort1,
+    UNameCluster2 = Host1 ++ integer_to_list(Port1),
+    communication_between_leafs(hd(Cluster1), hd(Cluster2), UNameCluster2),
 
     pass.
     
-read_updates_different_nodes([Node1, Node2]) ->
-    lager:info("Test started: read_updates_different_nodes"),
+communication_between_leafs(Node1, Node2, UNameNode2) ->
+    lager:info("Test started: communication_between_leafs"),
 
     Key=1,
     ClientId1 = client1,
@@ -48,106 +71,20 @@ read_updates_different_nodes([Node1, Node2]) ->
     Result2=rpc:call(Node1, saturn_leaf, update, [ClientId1, Key, 3]),
     ?assertMatch(ok, Result2),
 
-    rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-
-    %% Read from other client/node
-    Result3=rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
+    Result3=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
     ?assertMatch({ok, 3}, Result3),
 
-    %% Update from other client/node
-    Result4=rpc:call(Node2, saturn_leaf, update, [ClientId2, Key, 5]),
-    ?assertMatch(ok, Result4),
+    {ok, Label1} = rpc:call(Node1, saturn_proxy_vnode, last_label, [ClientId1]),
 
-    rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
-
-    Result5=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 5}, Result5).
-
-converger_no_interleaving([Node1, Node2])->
-    lager:info("Test started: converger_no_interleaving"),
-
-    Key=2,
-    ClientId1 = client3,
-    ClientId2 = client4,
-    
-    %% First label then data
-    %% Simulate remote arrival of label {Key, Clock, Node}
-    Label1 = {Key, 11, node2},
-    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label1]}]),
-    ?assertMatch(ok, Result1),
-    
-    %% Should not read pending update
-    Result2=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result2),
-
-    %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label1, Key, 10}]),
-    ?assertMatch(ok, Result3),
-
-    %% Should read remote update
-    Result4 = eventual_read(ClientId2, Key, Node2, 10),
-    ?assertMatch({ok, 10}, Result4),
-
-    %% First data then label
-    %% Simulate remote arrival of update, to complete remote label
-    Label2 = {Key, 15, node3},
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label2, Key, 20}]),
-    ?assertMatch(ok, Result5),
-
-    %% Should not read pending update
-    Result6=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 10}, Result6),
-
-    %% Simulate remote arrival of label {Key, Clock, Node}
-    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label2]}]),
-    ?assertMatch(ok, Result7),
-
-    %% Should read remote update
-    Result8 = eventual_read(ClientId2, Key, Node2, 20),
-    ?assertMatch({ok, 20}, Result8).
-
-converger_interleaving([Node1, Node2])->
-    lager:info("Test started: converger_interleaving"),
-
-    Key=3,
-    ClientId1 = client5,
-    ClientId2 = client6,
-    
-    %% First label then data
-    %% Simulate remote arrival of label {Key, Clock, Node}
-    Label1 = {Key, 11, node2},
-    Label2 = {Key, 20, node3},
-
-    Result1 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label1]}]),
-    ?assertMatch(ok, Result1),
-    
-    %% Should not read pending update
-    Result2=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result2),
-
-    %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label2, Key, 30}]),
-    ?assertMatch(ok, Result3),
-
-    %% Should not read pending update
-    Result4=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
+    %% Read from other client/node
+    Result4=rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
     ?assertMatch({ok, empty}, Result4),
 
-    %% Simulate remote arrival of update, to complete remote label
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_operation, Label1, Key, 20}]),
+    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [UNameNode2, {new_stream, [Label1]}]),
     ?assertMatch(ok, Result5),
 
-    %% Should read remote update
-    Result6 = eventual_read(ClientId2, Key, Node2, 20),
-    ?assertMatch({ok, 20}, Result6),
-
-    %% Simulate remote arrival of label {Key, Clock, Node}
-    Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [{new_stream, [Label2]}]),
-    ?assertMatch(ok, Result7),
-
-    %% Should read remote update
-    Result8 = eventual_read(ClientId2, Key, Node2, 30),
-    ?assertMatch({ok, 30}, Result8).
+    Result6 = eventual_read(ClientId2, Key, Node2, 3),
+    ?assertMatch({ok, 3}, Result6).
 
 eventual_read(ClientId, Key, Node, ExpectedResult) ->
     Result=rpc:call(Node, saturn_leaf, read, [ClientId, Key]),

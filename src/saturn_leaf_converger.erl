@@ -7,30 +7,35 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([start_link/0]).
+-export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([handle/1,
-         notify_update/1]).
+-export([handle/2,
+         notify_update/2]).
 
 -record(state, {labels_queue :: queue(),
-                ops_dict :: dict()}).
-                
+                ops_dict :: dict(),
+                uname}).
+               
+reg_name(UName) ->  list_to_atom(UName ++ atom_to_list(?MODULE)). 
 
-start_link() ->
-    gen_server:start({global, ?MODULE}, ?MODULE, [], []).
+start_link(UName) ->
+    gen_server:start({global, reg_name(UName)}, ?MODULE, [UName], []).
 
-handle(Message) ->
-    gen_server:call({global, ?MODULE}, Message, infinity).
+handle(UName, Message) ->
+    lager:info("Message received: ~p", [Message]),
+    gen_server:call({global, reg_name(UName)}, Message, infinity).
 
-notify_update(Label) ->
-    gen_server:cast({global, ?MODULE}, {update_completed, Label}).
+notify_update(UName, Label) ->
+    gen_server:cast({global, reg_name(UName)}, {update_completed, Label}).
 
-init([]) ->
+init([UName]) ->
     {ok, #state{labels_queue=queue:new(),
-                ops_dict=dict:new()}}.
+                ops_dict=dict:new(),
+                uname=UName}}.
 
 handle_call({new_stream, Stream}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
+    lager:info("New stream received. Label: ~p", Stream),
     case queue:len(Labels0) of
         0 ->
             [Label|_Tail] = Stream,
@@ -41,13 +46,14 @@ handle_call({new_stream, Stream}, _From, S0=#state{labels_queue=Labels0, ops_dic
     Labels1 = queue:join(Labels0, queue:from_list(Stream)),
     {reply, ok, S0#state{labels_queue=Labels1}};
 
-handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
+handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0, uname=UName}) ->
+    lager:info("New operation received. Label: ~p", [Label]),
     Ops1 = dict:store(Label, {Key, Value}, Ops0),
     case queue:peek(Labels0) of
         {value, Label} ->
             {Key, Clock, _} = Label,
-            ok = saturn_leaf_producer:new_clock(Clock),
-            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label});
+            ok = saturn_leaf_producer:new_clock(UName, Clock),
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, UName});
         _ ->
             noop
     end,
@@ -86,12 +92,12 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-check_match(Label, _S0=#state{ops_dict=Ops0}) ->
+check_match(Label, _S0=#state{ops_dict=Ops0, uname=UName}) ->
     case dict:find(Label, Ops0) of
         {ok, {Key, Value}} ->
             {Key, Clock, _} = Label,
-            ok = saturn_leaf_producer:new_clock(Clock),
-            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label});
+            ok = saturn_leaf_producer:new_clock(UName, Clock),
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, UName});
         _ ->
             noop
     end.

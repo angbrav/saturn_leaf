@@ -25,19 +25,29 @@
          update/4,
          new_label/5,
          notify_update/3,
-         check_tables_ready/0]).
+         last_label/1,
+         check_ready/1]).
 
 -record(state, {partition,
                 seq :: non_neg_integer(),
                 dreads_uid :: dict(),
                 dreads_counters :: dict(),
                 label_uid :: dict(),
+                last_label,
+                uname,
                 buffer :: queue()}).
 
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
 
+last_label(ClientId) ->
+    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    riak_core_vnode_master:sync_command(IndexNode,
+                                        last_label,
+                                        ?PROXY_MASTER).
 read(Node, ClientId, Key) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, ClientId, Key},
@@ -63,31 +73,36 @@ init([Partition]) ->
                  dreads_uid=dict:new(),
                  dreads_counters=dict:new(),
                  label_uid=dict:new(),
+                 last_label=none,
                  buffer=dict:new()}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
 %%      This function checks whether or not all tables have been intialized or not yet.
 %%      Returns true if the have, false otherwise.
-check_tables_ready() ->
+check_ready(Function) ->
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     PartitionList = chashbin:to_list(CHBin),
-    check_table_ready(PartitionList).
+    check_ready_partition(PartitionList, Function).
 
 
-check_table_ready([]) ->
+check_ready_partition([], _Function) ->
     true;
-check_table_ready([{Partition, Node} | Rest]) ->
+check_ready_partition([{Partition, Node} | Rest], Function) ->
     Result = riak_core_vnode_master:sync_command({Partition, Node},
-        {check_tables_ready},
+        Function,
         ?PROXY_MASTER,
         infinity),
     case Result of
         true ->
-            check_table_ready(Rest);
+            check_ready_partition(Rest, Function);
         false ->
             false
     end.
+
+handle_command({check_uname_ready}, _Sender, S0) ->
+    S1 = check_uname(S0),
+    {reply, true, S1};
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
@@ -101,7 +116,6 @@ handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dre
             ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
             {noreply, S1};
         {false, ConflictingUpdates} ->
-            lager:info("Buffering read"),
             DReadsUId1 = lists:foldl(fun(ConflictingUId, Dict) ->
                                         dict:append(ConflictingUId, UId, Dict)
                                      end, DReadsUId0, ConflictingUpdates),
@@ -109,20 +123,21 @@ handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dre
             {noreply, S1#state{dreads_counters=DReadsCounters1, dreads_uid=DReadsUId1}}
     end;
 
-handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition}) ->
+handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition, uname=UName}) ->
     Seq1 = Seq0 + 1,
     UId = {ClientId, Seq1},
     S1=S0#state{seq=Seq1},
     S2 = buffer_update(UId, Key, Value, S1),
-    saturn_leaf_producer:generate_label({Partition, node()}, UId, Key, Value),
+    saturn_leaf_producer:generate_label(UName, {Partition, node()}, UId, Key, Value),
     {reply, ok, S2};
 
-handle_command({new_label, UId, Label, Key, Value}, _From, S0=#state{dreads_uid=_DReadsUId0, dreads_counters=_DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
+handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_DReadsUId0, dreads_counters=_DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
+    S0=S#state{last_label=Label},
     {ClientId, _} = UId,
-    case saturn_groups_manager:get_datanodes(Key) of
+    case groups_manager_serv:get_datanodes(Key) of
         {ok, Group} ->
             lists:foreach(fun({Host, Port}) ->
-                            propagation_fsm_sup:start_fsm(Port, Host, {new_operation, Label, Key, Value})
+                            propagation_fsm_sup:start_fsm([Port, Host, {new_operation, Label, Key, Value}])
                           end, Group);
         {error, Reason} ->
             lager:error("No replication group for key: ~p (~p)", [Key, Reason])
@@ -131,7 +146,6 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S0=#state{dreads_uid=
         {ok, Queue} ->
             case queue:peek(Queue) of
                 {value, {UId, _, _}} ->
-                    lager:info("Label received"),
                     ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, Label, UId, {Partition, node()}}),
                     {noreply, S0};
                 _Other ->
@@ -143,15 +157,14 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S0=#state{dreads_uid=
             {noreply, S0}
     end;
 
-handle_command({update_completed, UId, Label}, _From, S0) ->
-    saturn_leaf_producer:unblock_label(Label),
+handle_command({update_completed, UId, Label}, _From, S0=#state{uname=UName}) ->
+    saturn_leaf_producer:unblock_label(UName, Label),
     S1 = process_buffer(UId, S0),
     S2 = process_pending_reads(UId, S1),
     {noreply, S2};
 
-%% Sample command: respond to a ping
-handle_command(ping, _Sender, State) ->
-    {reply, {pong, State#state.partition}, State};
+handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
+    {reply, {ok, LastLabel}, S0};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -192,7 +205,6 @@ terminate(_Reason, _State) ->
 process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0}) ->
     case dict:find(UId, DReadsUId0) of
         {ok, ListReads} ->
-            lager:info("Update blocking reads"),
             DReadsUId1 = dict:erase(UId, DReadsUId0),
             DReadsCounters1 = lists:foldl(fun(ReadUId, Dict) ->
                                             case Dict of
@@ -203,7 +215,6 @@ process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DRea
                                                         {ok, {Counter, From, Key}} ->
                                                             case Counter of
                                                                 1 ->
-                                                                    lager:info("Serving buffered read"),
                                                                     ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
                                                                     dict:erase(ReadUId, Dict);
                                                                 _ ->
@@ -290,6 +301,17 @@ buffer_update(UId, Key, Value, S0=#state{buffer=Buffer0}) ->
     end,
     Buffer1 = dict:store(ClientId, Queue1, Buffer0),
     S0#state{buffer=Buffer1}.
+
+check_uname(S0) ->
+    Value = riak_core_metadata:get(?HOSTPORTPREFIX, ?HOSTPORTKEY),
+    case Value of
+        undefined ->
+            timer:sleep(100),
+            check_uname(S0);
+        UName ->
+            S0#state{uname=UName}
+    end.
+
 
 -ifdef(TEST).
 if_safe_read_test() ->

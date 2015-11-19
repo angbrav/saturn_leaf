@@ -8,6 +8,7 @@
                   kernel,
                   stdlib,
                   riak_core,
+                  saturn_groups_manager,
                   lager
                  ]},
   {mod, { saturn_leaf_app, []}},

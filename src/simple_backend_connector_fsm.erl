@@ -64,12 +64,12 @@ read(timeout, State=#state{payload=Payload})->
     {next_state, stop, State#state{reason=normal},0}.
 
 propagation(timeout, State=#state{payload=Payload})->
-    {Key, Value, Label} = Payload,
+    {Key, Value, Label, UName} = Payload,
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     ok = saturn_simple_backend_vnode:update(IndexNode, Key, Value),
-    saturn_leaf_converger:notify_update(Label),
+    saturn_leaf_converger:notify_update(UName, Label),
     {next_state, stop, State#state{reason=normal},0}.
 
 stop(timeout, State=#state{reason=Reason}) ->

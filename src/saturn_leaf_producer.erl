@@ -7,31 +7,33 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([start_link/0]).
+-export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([new_clock/1,
-         generate_label/4,
-         unblock_label/1]).
+-export([new_clock/2,
+         generate_label/5,
+         unblock_label/2]).
 
 -record(state, {clock :: non_neg_integer(),
-                upstream :: list()}).
+                upstream :: list(),
+                uname}).
                 
+reg_name(UName) ->  list_to_atom(UName ++ atom_to_list(?MODULE)).
 
-start_link() ->
-    gen_server:start({global, ?MODULE}, ?MODULE, [], []).
+start_link(UName) ->
+    gen_server:start({global, reg_name(UName)}, ?MODULE, [UName], []).
 
-new_clock(TS) ->
-    gen_server:call({global, ?MODULE}, {new_clock, TS}, infinity).
+new_clock(UName, TS) ->
+    gen_server:call({global, reg_name(UName)}, {new_clock, TS}, infinity).
 
-generate_label(Proxy, UId, Key, Value) ->
-    gen_server:cast({global, ?MODULE}, {generate_label, Proxy, UId, Key, Value}).
+generate_label(UName, Proxy, UId, Key, Value) ->
+    gen_server:cast({global, reg_name(UName)}, {generate_label, Proxy, UId, Key, Value}).
 
-unblock_label(Label) ->
-    gen_server:cast({global, ?MODULE}, {unblock_label, Label}).
+unblock_label(UName, Label) ->
+    gen_server:cast({global, reg_name(UName)}, {unblock_label, Label}).
 
-init([]) ->
-    {ok, #state{clock=0, upstream=[]}}.
+init([UName]) ->
+    {ok, #state{clock=0, upstream=[], uname=UName}}.
 
 handle_call({new_clock, TS}, _From, S0=#state{clock=Clock0}) ->
     Clock1 = max(TS, Clock0),
@@ -66,7 +68,7 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
             Upstream1 = lists:nthtail(1, Upstream0),
             {Stream0, Upstream2} = generate_labels(Upstream1, [Label]),
             lager:info("Generated stream: ~p",[Stream0]),
-            case saturn_groups_manager:filter_stream_leaf(Stream0) of
+            case groups_manager_serv:filter_stream_leaf(Stream0) of
                 {ok, [], _} ->
                     noop;
                 {ok, _, no_indexnode} ->
@@ -87,8 +89,8 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
 handle_cast(_Info, State) ->
     {noreply, State}.
 
-handle_info(_Info, State) ->
-    lager:info("Weird message"),
+handle_info(Info, State) ->
+    lager:info("Weird message: ~p", [Info]),
     {noreply, State}.
 
 terminate(_Reason, _State) ->

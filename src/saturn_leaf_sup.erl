@@ -18,12 +18,20 @@ start_link() ->
 
 start_leaf(Port) ->
 
+    {ok, List} = inet:getif(),
+    {Ip, _, _} = hd(List),
+    Host = inet_parse:ntoa(Ip),
+
+    UName = Host ++ integer_to_list(Port),
+
+    riak_core_metadata:put(?HOSTPORTPREFIX, ?HOSTPORTKEY, UName),
+
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
-                    {saturn_leaf_converger, start_link, []},
+                    {saturn_leaf_converger, start_link, [UName]},
                     permanent, 5000, worker, [saturn_leaf_converger]}),
 
     supervisor:start_child(?MODULE, {saturn_tcp_recv_fsm,
-                    {saturn_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger]},
+                    {saturn_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, UName]},
                     permanent, 5000, worker, [saturn_tcp_recv_fsm]}),
 
     supervisor:start_child(?MODULE, {tcp_connection_handler_fsm_sup,
@@ -31,8 +39,10 @@ start_leaf(Port) ->
                     permanent, 5000, supervisor, [tcp_connection_handler_fsm_sup]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, []},
-                    permanent, 5000, worker, [saturn_leaf_producer]}).
+                    {saturn_leaf_producer, start_link, [UName]},
+                    permanent, 5000, worker, [saturn_leaf_producer]}),
+
+    {ok, {Host, Port}}.
 
 %% ===================================================================
 %% Supervisor callbacks
@@ -45,10 +55,7 @@ init(_Args) ->
     PropagatorSup = {propagation_fsm_sup,
                     {propagation_fsm_sup, start_link, []},
                     permanent, 5000, supervisor, [propagation_fsm_sup]},
-    GroupsManager = {saturn_groups_manager,
-                     {saturn_groups_manager, start_link, []},
-                     permanent, 5000, worker, [saturn_groups_manager]},
-    Childs0 = [ProxyMaster, PropagatorSup, GroupsManager],
+    Childs0 = [ProxyMaster, PropagatorSup],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,
