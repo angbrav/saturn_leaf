@@ -21,19 +21,16 @@ confirm() ->
     Node2 = hd(Cluster2),
 
     %% Starting servers in Node1
-    {ok, HostPort0}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040]),
+    {ok, HostPort0}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040, 0]),
     
     %% Starting servers in Node1
-    {ok, HostPort1}=rpc:call(Node2, saturn_leaf_sup, start_leaf, [4041]),
+    {ok, HostPort1}=rpc:call(Node2, saturn_leaf_sup, start_leaf, [4041, 1]),
 
     lager:info("Waiting until vnodes are started up"),
     rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
     rt:wait_until(hd(Cluster2),fun wait_init:check_ready/1),
     lager:info("Vnodes are started up"),
     
-    ok = common_rt:assign_id_cluster(Cluster1, 0), 
-    ok = common_rt:assign_id_cluster(Cluster2, 1), 
-
     Tree0 = dict:store(0, [-1, 300, 50], dict:new()),
     Tree1 = dict:store(1, [300, -1, 70], Tree0),
     Tree2 = dict:store(2, [50, 70, -1], Tree1),
@@ -48,15 +45,11 @@ confirm() ->
     ok = common_rt:new_node_cluster(Cluster1, 1, HostPort1),
     ok = common_rt:new_node_cluster(Cluster2, 0, HostPort0),
 
-    UNameCluster2 = common_rt:get_uname(HostPort1),
-
-    {Host1, Port1} = HostPort1,
-    UNameCluster2 = Host1 ++ integer_to_list(Port1),
-    communication_between_leafs(hd(Cluster1), hd(Cluster2), UNameCluster2),
+    communication_between_leafs(hd(Cluster1), hd(Cluster2)),
 
     pass.
     
-communication_between_leafs(Node1, Node2, UNameNode2) ->
+communication_between_leafs(Node1, Node2) ->
     lager:info("Test started: communication_between_leafs"),
 
     Key=1,
@@ -80,7 +73,7 @@ communication_between_leafs(Node1, Node2, UNameNode2) ->
     Result4=rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
     ?assertMatch({ok, empty}, Result4),
 
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [UNameNode2, {new_stream, [Label1]}]),
+    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [1, {new_stream, [Label1], 2}]),
     ?assertMatch(ok, Result5),
 
     Result6 = eventual_read(ClientId2, Key, Node2, 3),

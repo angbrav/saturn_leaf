@@ -16,24 +16,24 @@
 
 -record(state, {clock :: non_neg_integer(),
                 upstream :: list(),
-                uname}).
+                myid}).
                 
-reg_name(UName) ->  list_to_atom(UName ++ atom_to_list(?MODULE)).
+reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
 
-start_link(UName) ->
-    gen_server:start({global, reg_name(UName)}, ?MODULE, [UName], []).
+start_link(MyId) ->
+    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
-new_clock(UName, TS) ->
-    gen_server:call({global, reg_name(UName)}, {new_clock, TS}, infinity).
+new_clock(MyId, TS) ->
+    gen_server:call({global, reg_name(MyId)}, {new_clock, TS}, infinity).
 
-generate_label(UName, Proxy, UId, Key, Value) ->
-    gen_server:cast({global, reg_name(UName)}, {generate_label, Proxy, UId, Key, Value}).
+generate_label(MyId, Proxy, UId, Key, Value) ->
+    gen_server:cast({global, reg_name(MyId)}, {generate_label, Proxy, UId, Key, Value}).
 
-unblock_label(UName, Label) ->
-    gen_server:cast({global, reg_name(UName)}, {unblock_label, Label}).
+unblock_label(MyId, Label) ->
+    gen_server:cast({global, reg_name(MyId)}, {unblock_label, Label}).
 
-init([UName]) ->
-    {ok, #state{clock=0, upstream=[], uname=UName}}.
+init([MyId]) ->
+    {ok, #state{clock=0, upstream=[], myid=MyId}}.
 
 handle_call({new_clock, TS}, _From, S0=#state{clock=Clock0}) ->
     Clock1 = max(TS, Clock0),
@@ -46,7 +46,7 @@ handle_cast({generate_label, Proxy, UId, Key, Value}, S0=#state{clock=Clock0, up
     saturn_proxy_vnode:new_label(Proxy, UId, Label, Key, Value),
     {noreply, S0#state{clock=Clock1, upstream=Upstream1}};
             
-handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
+handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0, myid=MyId}) ->
     Index = saturn_utilities:binary_search(Upstream0, {Label, unblocked}, fun(Item1, Item2) ->
                                                                     {{_K1, Clock1, _N1}, _} = Item1,
                                                                     {{_K2, Clock2, _N2}, _} = Item2,
@@ -74,7 +74,7 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0}) ->
                 {ok, _, no_indexnode} ->
                     noop;
                 {ok, Stream1, {Host, Port}} ->
-                    propagation_fsm_sup:start_fsm(Port, Host, {new_stream, Stream1})
+                    propagation_fsm_sup:start_fsm(Port, Host, {new_stream, Stream1, MyId})
             end;
         {ok, Length} ->
             Upstream2 = lists:droplast(Upstream0) ++ {Label, unblocked};

@@ -4,7 +4,7 @@
 -include("saturn_leaf.hrl").
 %% API
 -export([start_link/0,
-         start_leaf/1]).
+         start_leaf/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -16,22 +16,20 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-start_leaf(Port) ->
+start_leaf(Port, MyId) ->
 
     {ok, List} = inet:getif(),
     {Ip, _, _} = hd(List),
     Host = inet_parse:ntoa(Ip),
 
-    UName = Host ++ integer_to_list(Port),
-
-    riak_core_metadata:put(?HOSTPORTPREFIX, ?HOSTPORTKEY, UName),
+    riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
 
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
-                    {saturn_leaf_converger, start_link, [UName]},
+                    {saturn_leaf_converger, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_converger]}),
 
     supervisor:start_child(?MODULE, {saturn_tcp_recv_fsm,
-                    {saturn_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, UName]},
+                    {saturn_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, MyId]},
                     permanent, 5000, worker, [saturn_tcp_recv_fsm]}),
 
     supervisor:start_child(?MODULE, {tcp_connection_handler_fsm_sup,
@@ -39,7 +37,7 @@ start_leaf(Port) ->
                     permanent, 5000, supervisor, [tcp_connection_handler_fsm_sup]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, [UName]},
+                    {saturn_leaf_producer, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_producer]}),
 
     {ok, {Host, Port}}.

@@ -23,7 +23,7 @@ wait_ready_nodes([Node|Rest]) ->
 %% except it takes as input a single physical node instead of a list
 check_ready(Node) ->
     lager:info("Checking if node ~w is ready ~n", [Node]),
-    case rpc:call(Node,saturn_proxy_vnode,check_ready,[{check_uname_ready}]) of
+    case rpc:call(Node,saturn_proxy_vnode,check_ready,[{check_myid_ready}]) of
 	true ->
         lager:info("Node ~w is ready! ~n", [Node]),
         true;

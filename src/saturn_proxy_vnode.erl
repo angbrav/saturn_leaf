@@ -34,7 +34,7 @@
                 dreads_counters :: dict(),
                 label_uid :: dict(),
                 last_label,
-                uname,
+                myid,
                 buffer :: queue()}).
 
 %% API
@@ -100,8 +100,8 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
             false
     end.
 
-handle_command({check_uname_ready}, _Sender, S0) ->
-    S1 = check_uname(S0),
+handle_command({check_myid_ready}, _Sender, S0) ->
+    S1 = check_myid(S0),
     {reply, true, S1};
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
@@ -123,12 +123,12 @@ handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dre
             {noreply, S1#state{dreads_counters=DReadsCounters1, dreads_uid=DReadsUId1}}
     end;
 
-handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition, uname=UName}) ->
+handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition, myid=MyId}) ->
     Seq1 = Seq0 + 1,
     UId = {ClientId, Seq1},
     S1=S0#state{seq=Seq1},
     S2 = buffer_update(UId, Key, Value, S1),
-    saturn_leaf_producer:generate_label(UName, {Partition, node()}, UId, Key, Value),
+    saturn_leaf_producer:generate_label(MyId, {Partition, node()}, UId, Key, Value),
     {reply, ok, S2};
 
 handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_DReadsUId0, dreads_counters=_DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
@@ -157,8 +157,8 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_
             {noreply, S0}
     end;
 
-handle_command({update_completed, UId, Label}, _From, S0=#state{uname=UName}) ->
-    saturn_leaf_producer:unblock_label(UName, Label),
+handle_command({update_completed, UId, Label}, _From, S0=#state{myid=MyId}) ->
+    saturn_leaf_producer:unblock_label(MyId, Label),
     S1 = process_buffer(UId, S0),
     S2 = process_pending_reads(UId, S1),
     {noreply, S2};
@@ -302,14 +302,15 @@ buffer_update(UId, Key, Value, S0=#state{buffer=Buffer0}) ->
     Buffer1 = dict:store(ClientId, Queue1, Buffer0),
     S0#state{buffer=Buffer1}.
 
-check_uname(S0) ->
-    Value = riak_core_metadata:get(?HOSTPORTPREFIX, ?HOSTPORTKEY),
+check_myid(S0) ->
+    Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
     case Value of
         undefined ->
             timer:sleep(100),
-            check_uname(S0);
-        UName ->
-            S0#state{uname=UName}
+            check_myid(S0);
+        MyId ->
+            groups_manager_serv:set_myid(MyId),
+            S0#state{myid=MyId}
     end.
 
 

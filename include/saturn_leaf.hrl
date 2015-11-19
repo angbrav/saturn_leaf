@@ -15,5 +15,5 @@
 -define(BACKEND, simple_backend).
 -define(BACKEND_CONNECTOR_FSM, simple_backend_connector_fsm).
 
--define(HOSTPORTPREFIX, {prefix, hostport_prefix}).
--define(HOSTPORTKEY, hostport_key).
+-define(MYIDPREFIX, {prefix, myid_prefix}).
+-define(MYIDKEY, myid_key).

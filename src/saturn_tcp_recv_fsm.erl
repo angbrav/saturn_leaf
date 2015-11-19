@@ -1,7 +1,7 @@
 -module(saturn_tcp_recv_fsm).
 -behaviour(gen_fsm).
 
--record(state, {port, handler, listener, uname}). % the current socket
+-record(state, {port, handler, listener, myid}). % the current socket
 
 -export([start_link/3]).
 -export([init/1,
@@ -15,23 +15,23 @@
 
 -define(TIMEOUT,10000).
 
-start_link(Port, Handler, UName) ->
-    gen_fsm:start_link(?MODULE, [Port, Handler, UName], []).
+start_link(Port, Handler, MyId) ->
+    gen_fsm:start_link(?MODULE, [Port, Handler, MyId], []).
 
-init([Port, Handler, UName]) ->
+init([Port, Handler, MyId]) ->
     {ok, ListenSocket} = gen_tcp:listen(
                            Port,
                            [{active,false}, binary,
                             {packet,4},{reuseaddr, true}
                            ]),
-    {ok, accept, #state{port=Port, listener=ListenSocket, handler=Handler, uname=UName},0}.
+    {ok, accept, #state{port=Port, listener=ListenSocket, handler=Handler, myid=MyId},0}.
 
 %% Accepts an incoming tcp connection and spawn and new fsm 
 %% to process the connection, so that new connections could 
 %% be processed in parallel
-accept(timeout, State=#state{listener=ListenSocket, handler=Handler, uname=UName}) ->
+accept(timeout, State=#state{listener=ListenSocket, handler=Handler, myid=MyId}) ->
     {ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
-    {ok, _} = tcp_connection_handler_fsm_sup:start_fsm([AcceptSocket, Handler, UName]),
+    {ok, _} = tcp_connection_handler_fsm_sup:start_fsm([AcceptSocket, Handler, MyId]),
     {next_state, accept, State, 0}.
 
 handle_info(Message, _StateName, StateData) ->

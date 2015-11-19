@@ -15,26 +15,26 @@
 
 -record(state, {labels_queue :: queue(),
                 ops_dict :: dict(),
-                uname}).
+                myid}).
                
-reg_name(UName) ->  list_to_atom(UName ++ atom_to_list(?MODULE)). 
+reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
 
-start_link(UName) ->
-    gen_server:start({global, reg_name(UName)}, ?MODULE, [UName], []).
+start_link(MyId) ->
+    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
-handle(UName, Message) ->
+handle(MyId, Message) ->
     lager:info("Message received: ~p", [Message]),
-    gen_server:call({global, reg_name(UName)}, Message, infinity).
+    gen_server:call({global, reg_name(MyId)}, Message, infinity).
 
-notify_update(UName, Label) ->
-    gen_server:cast({global, reg_name(UName)}, {update_completed, Label}).
+notify_update(MyId, Label) ->
+    gen_server:cast({global, reg_name(MyId)}, {update_completed, Label}).
 
-init([UName]) ->
+init([MyId]) ->
     {ok, #state{labels_queue=queue:new(),
                 ops_dict=dict:new(),
-                uname=UName}}.
+                myid=MyId}}.
 
-handle_call({new_stream, Stream}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
+handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
     lager:info("New stream received. Label: ~p", Stream),
     case queue:len(Labels0) of
         0 ->
@@ -46,14 +46,14 @@ handle_call({new_stream, Stream}, _From, S0=#state{labels_queue=Labels0, ops_dic
     Labels1 = queue:join(Labels0, queue:from_list(Stream)),
     {reply, ok, S0#state{labels_queue=Labels1}};
 
-handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0, uname=UName}) ->
+handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0, myid=MyId}) ->
     lager:info("New operation received. Label: ~p", [Label]),
     Ops1 = dict:store(Label, {Key, Value}, Ops0),
     case queue:peek(Labels0) of
         {value, Label} ->
             {Key, Clock, _} = Label,
-            ok = saturn_leaf_producer:new_clock(UName, Clock),
-            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, UName});
+            ok = saturn_leaf_producer:new_clock(MyId, Clock),
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, MyId});
         _ ->
             noop
     end,
@@ -92,12 +92,12 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-check_match(Label, _S0=#state{ops_dict=Ops0, uname=UName}) ->
+check_match(Label, _S0=#state{ops_dict=Ops0, myid=MyId}) ->
     case dict:find(Label, Ops0) of
         {ok, {Key, Value}} ->
             {Key, Clock, _} = Label,
-            ok = saturn_leaf_producer:new_clock(UName, Clock),
-            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, UName});
+            ok = saturn_leaf_producer:new_clock(MyId, Clock),
+            ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, Label, MyId});
         _ ->
             noop
     end.
