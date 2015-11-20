@@ -28,13 +28,13 @@ start_leaf(Port, MyId) ->
                     {saturn_leaf_converger, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_converger]}),
 
-    supervisor:start_child(?MODULE, {saturn_tcp_recv_fsm,
-                    {saturn_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, MyId]},
-                    permanent, 5000, worker, [saturn_tcp_recv_fsm]}),
+    supervisor:start_child(?MODULE, {saturn_leaf_tcp_recv_fsm,
+                    {saturn_leaf_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, MyId]},
+                    permanent, 5000, worker, [saturn_leaf_tcp_recv_fsm]}),
 
-    supervisor:start_child(?MODULE, {tcp_connection_handler_fsm_sup,
-                    {tcp_connection_handler_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [tcp_connection_handler_fsm_sup]}),
+    supervisor:start_child(?MODULE, {saturn_leaf_tcp_connection_handler_fsm_sup,
+                    {saturn_leaf_tcp_connection_handler_fsm_sup, start_link, []},
+                    permanent, 5000, supervisor, [saturn_leaf_tcp_connection_handler_fsm_sup]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_producer,
                     {saturn_leaf_producer, start_link, [MyId]},

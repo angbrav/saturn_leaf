@@ -1,4 +1,4 @@
--module(propagation_fsm_sup).
+-module(saturn_leaf_propagation_fsm_sup).
 
 -behavior(supervisor).
 
@@ -15,7 +15,7 @@ start_fsm(Args) ->
 
 init([]) ->
     {ok, {{simple_one_for_one, 5, 10},
-      [{propagation_fsm,
-        {propagation_fsm, start_link, []},
-        transient, 5000, worker, [propagation_fsm]}]
+      [{saturn_leaf_propagation_fsm,
+        {saturn_leaf_propagation_fsm, start_link, []},
+        transient, 5000, worker, [saturn_leaf_propagation_fsm]}]
      }}.

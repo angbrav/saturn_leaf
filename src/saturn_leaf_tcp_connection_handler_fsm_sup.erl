@@ -1,5 +1,5 @@
 %% @doc Supervise the fsm.
--module(tcp_connection_handler_fsm_sup).
+-module(saturn_leaf_tcp_connection_handler_fsm_sup).
 -behavior(supervisor).
 
 -export([start_fsm/1,
@@ -16,7 +16,7 @@ start_fsm(Args) ->
 
 
 init([]) ->
-    Worker = {tcp_connection_handler_fsm,
-              {tcp_connection_handler_fsm, start_link, []},
-              transient, 5000, worker, [tcp_connection_handler_fsm]},
+    Worker = {saturn_leaf_tcp_connection_handler_fsm,
+              {saturn_leaf_tcp_connection_handler_fsm, start_link, []},
+              transient, 5000, worker, [saturn_leaf_tcp_connection_handler_fsm]},
     {ok, {{simple_one_for_one, 5, 10}, [Worker]}}.

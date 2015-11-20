@@ -1,4 +1,4 @@
--module(saturn_tcp_recv_fsm).
+-module(saturn_leaf_tcp_recv_fsm).
 -behaviour(gen_fsm).
 
 -record(state, {port, handler, listener, myid}). % the current socket
@@ -31,7 +31,7 @@ init([Port, Handler, MyId]) ->
 %% be processed in parallel
 accept(timeout, State=#state{listener=ListenSocket, handler=Handler, myid=MyId}) ->
     {ok, AcceptSocket} = gen_tcp:accept(ListenSocket),
-    {ok, _} = tcp_connection_handler_fsm_sup:start_fsm([AcceptSocket, Handler, MyId]),
+    {ok, _} = saturn_leaf_tcp_connection_handler_fsm_sup:start_fsm([AcceptSocket, Handler, MyId]),
     {next_state, accept, State, 0}.
 
 handle_info(Message, _StateName, StateData) ->

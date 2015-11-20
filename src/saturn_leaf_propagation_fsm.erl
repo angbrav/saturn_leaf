@@ -1,4 +1,4 @@
--module(propagation_fsm).
+-module(saturn_leaf_propagation_fsm).
 -behaviour(gen_fsm).
 
 -export([start_link/3]).
