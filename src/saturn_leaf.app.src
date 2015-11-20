@@ -9,6 +9,7 @@
                   stdlib,
                   riak_core,
                   saturn_groups_manager,
+                  saturn_internal,
                   lager
                  ]},
   {mod, { saturn_leaf_app, []}},

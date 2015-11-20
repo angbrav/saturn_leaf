@@ -50,9 +50,9 @@ init(_Args) ->
     ProxyMaster = {?PROXY_MASTER,
                   {riak_core_vnode_master, start_link, [saturn_proxy_vnode]},
                   permanent, 5000, worker, [riak_core_vnode_master]},
-    PropagatorSup = {propagation_fsm_sup,
-                    {propagation_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [propagation_fsm_sup]},
+    PropagatorSup = {saturn_leaf_propagation_fsm_sup,
+                    {saturn_leaf_propagation_fsm_sup, start_link, []},
+                    permanent, 5000, supervisor, [saturn_leaf_propagation_fsm_sup]},
     Childs0 = [ProxyMaster, PropagatorSup],
     Childs1 = case ?BACKEND of
                 simple_backend ->

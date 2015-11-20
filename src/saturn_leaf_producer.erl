@@ -74,7 +74,7 @@ handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0, myid=MyId}) ->
                 {ok, _, no_indexnode} ->
                     noop;
                 {ok, Stream1, {Host, Port}} ->
-                    propagation_fsm_sup:start_fsm(Port, Host, {new_stream, Stream1, MyId})
+                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream1, MyId}])
             end;
         {ok, Length} ->
             Upstream2 = lists:droplast(Upstream0) ++ {Label, unblocked};

@@ -137,7 +137,7 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_
     case groups_manager_serv:get_datanodes(Key) of
         {ok, Group} ->
             lists:foreach(fun({Host, Port}) ->
-                            propagation_fsm_sup:start_fsm([Port, Host, {new_operation, Label, Key, Value}])
+                            saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_operation, Label, Key, Value}])
                           end, Group);
         {error, Reason} ->
             lager:error("No replication group for key: ~p (~p)", [Key, Reason])
