@@ -74,16 +74,5 @@ communication_between_leafs(Node1, Node2) ->
     Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [1, {new_stream, [Label1], 2}]),
     ?assertMatch(ok, Result5),
 
-    Result6 = eventual_read(Key, Node2, 3),
+    Result6 = saturn_test_utilities:eventual_read(Key, Node2, 3),
     ?assertMatch({ok, {3, _Clock3}}, Result6).
-
-eventual_read(Key, Node, ExpectedResult) ->
-    Result=rpc:call(Node, saturn_leaf, read, [Key]),
-    case Result of
-        {ok, {ExpectedResult, _Clock}} -> Result;
-        _ ->
-            lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
-            timer:sleep(500),
-            eventual_read(Key, Node, ExpectedResult)
-    end.
-

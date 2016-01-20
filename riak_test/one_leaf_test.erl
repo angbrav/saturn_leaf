@@ -78,7 +78,7 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result3),
 
     %% Should read remote update
-    Result4 = eventual_read(Key, Node2, 10),
+    Result4 = saturn_test_utilities:eventual_read(Key, Node2, 10),
     ?assertMatch({ok, {10, _Clock}}, Result4),
 
     %% First data then label
@@ -96,7 +96,7 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result7),
 
     %% Should read remote update
-    Result8 = eventual_read(Key, Node2, 20),
+    Result8 = saturn_test_utilities:eventual_read(Key, Node2, 20),
     ?assertMatch({ok, {20, _Clock3}}, Result8).
 
 converger_interleaving([Node1, Node2])->
@@ -129,7 +129,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result5),
 
     %% Should read remote update
-    Result6 = eventual_read(Key, Node2, 20),
+    Result6 = saturn_test_utilities:eventual_read(Key, Node2, 20),
     ?assertMatch({ok, {20, _Clock1}}, Result6),
 
     %% Simulate remote arrival of label {Key, Clock, Node}
@@ -137,16 +137,5 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result7),
 
     %% Should read remote update
-    Result8 = eventual_read(Key, Node2, 30),
+    Result8 = saturn_test_utilities:eventual_read(Key, Node2, 30),
     ?assertMatch({ok, {30, _Clock2}}, Result8).
-
-eventual_read(Key, Node, ExpectedResult) ->
-    Result=rpc:call(Node, saturn_leaf, read, [Key]),
-    case Result of
-        {ok, {ExpectedResult, _Clock}} -> Result;
-        _ ->
-            lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
-            timer:sleep(500),
-            eventual_read(Key, Node, ExpectedResult)
-    end.
-
