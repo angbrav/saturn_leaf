@@ -53,39 +53,37 @@ communication_between_leafs(Node1, Node2) ->
     lager:info("Test started: communication_between_leafs"),
 
     Key=1,
-    ClientId1 = client1,
-    ClientId2 = client2,
 
     %% Reading a key thats empty
-    Result1=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result1),
+    Result1=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
 
     %% Update key
-    Result2=rpc:call(Node1, saturn_leaf, update, [ClientId1, Key, 3]),
-    ?assertMatch(ok, Result2),
+    Result2=rpc:call(Node1, saturn_leaf, update, [Key, 3, 0]),
+    ?assertMatch({ok, _Clock1}, Result2),
 
-    Result3=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 3}, Result3),
+    Result3=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {3, _Clock2}}, Result3),
 
-    {ok, Label1} = rpc:call(Node1, saturn_proxy_vnode, last_label, [ClientId1]),
+    {ok, Label1} = rpc:call(Node1, saturn_proxy_vnode, last_label, [Key]),
 
     %% Read from other client/node
-    Result4=rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
-    ?assertMatch({ok, empty}, Result4),
+    Result4=rpc:call(Node2, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result4),
 
     Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [1, {new_stream, [Label1], 2}]),
     ?assertMatch(ok, Result5),
 
-    Result6 = eventual_read(ClientId2, Key, Node2, 3),
-    ?assertMatch({ok, 3}, Result6).
+    Result6 = eventual_read(Key, Node2, 3),
+    ?assertMatch({ok, {3, _Clock3}}, Result6).
 
-eventual_read(ClientId, Key, Node, ExpectedResult) ->
-    Result=rpc:call(Node, saturn_leaf, read, [ClientId, Key]),
+eventual_read(Key, Node, ExpectedResult) ->
+    Result=rpc:call(Node, saturn_leaf, read, [Key]),
     case Result of
-        {ok, ExpectedResult} -> Result;
+        {ok, {ExpectedResult, _Clock}} -> Result;
         _ ->
             lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
             timer:sleep(500),
-            eventual_read(ClientId, Key, Node, ExpectedResult)
+            eventual_read(Key, Node, ExpectedResult)
     end.
 
