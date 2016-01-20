@@ -25,22 +25,28 @@
          update/4,
          propagate/4,
          heartbeat/2,
+         last_label/1,
          update_completed/5,
          check_ready/1]).
 
 -record(state, {partition,
                 seq :: non_neg_integer(),
-                dreads_uid :: dict(),
-                dreads_counters :: dict(),
-                label_uid :: dict(),
-                last_label,
                 max_ts,
-                myid,
-                buffer :: queue()}).
+                last_label,
+                myid}).
 
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
+
+%Testing purposes
+last_label(Key) ->
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    riak_core_vnode_master:sync_command(IndexNode,
+                                        last_label,
+                                        ?PROXY_MASTER).
 
 read(Node, Key) ->
     riak_core_vnode_master:sync_command(Node,
@@ -71,12 +77,8 @@ propagate(Node, Key, Value, TimeStamp) ->
 init([Partition]) ->
     {ok, #state{partition=Partition,
                 max_ts=0,
-                seq=0,
-                dreads_uid=dict:new(),
-                dreads_counters=dict:new(),
-                label_uid=dict:new(),
                 last_label=none,
-                buffer=dict:new()}}.
+                seq=0}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -113,12 +115,12 @@ handle_command({read, Key}, From, S0) ->
     ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
     {noreply, S0};
 
-handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, seq=Seq0}) ->
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, seq=Seq0, partition=Partition}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
     Seq1=Seq0+1,
     ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, TimeStamp, Seq1}),
-    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, seq=Seq1}};
+    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, seq=Seq1, last_label={Key, TimeStamp, {Partition, node()}}}};
 
 handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{partition=Partition, myid=MyId}) ->
     Label = {Key, TimeStamp, {Partition, node()}},
@@ -144,6 +146,9 @@ handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, seq=Seq0
     saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock, Seq1),
     riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
     {noreply, S0#state{myid=MyId, seq=Seq1}};
+
+handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
+    {reply, {ok, LastLabel}, S0};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
