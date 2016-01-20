@@ -2,6 +2,10 @@
 
 -export([confirm/0]).
 
+-export([read_updates_different_nodes/1,
+         converger_no_interleaving/1,
+         converger_interleaving/1]).
+
 -include_lib("eunit/include/eunit.hrl").
 
 -define(HARNESS, (rt_config:get(rt_harness))).
@@ -34,38 +38,30 @@ read_updates_different_nodes([Node1, Node2]) ->
     lager:info("Test started: read_updates_different_nodes"),
 
     Key=1,
-    ClientId1 = client1,
-    ClientId2 = client2,
 
     %% Reading a key thats empty
-    Result1=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result1),
+    {ok, {_,Clock1}} = Result1=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, Clock1}}, Result1),
 
     %% Update key
-    Result2=rpc:call(Node1, saturn_leaf, update, [ClientId1, Key, 3]),
-    ?assertMatch(ok, Result2),
-
-    rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
+    Result2=rpc:call(Node1, saturn_leaf, update, [Key, 3, Clock1]),
+    ?assertMatch({ok, _Clock2}, Result2),
 
     %% Read from other client/node
-    Result3=rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
-    ?assertMatch({ok, 3}, Result3),
+    Result3=rpc:call(Node2, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {3, _Clock2}}, Result3),
 
     %% Update from other client/node
-    Result4=rpc:call(Node2, saturn_leaf, update, [ClientId2, Key, 5]),
-    ?assertMatch(ok, Result4),
+    Result4=rpc:call(Node2, saturn_leaf, update, [Key, 5, 0]),
+    ?assertMatch({ok, _Clock3}, Result4),
 
-    rpc:call(Node2, saturn_leaf, read, [ClientId2, Key]),
-
-    Result5=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 5}, Result5).
+    Result5=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {5, _Clock3}}, Result5).
 
 converger_no_interleaving([Node1, Node2])->
     lager:info("Test started: converger_no_interleaving"),
 
     Key=2,
-    ClientId1 = client3,
-    ClientId2 = client4,
     
     %% First label then data
     %% Simulate remote arrival of label {Key, Clock, Node}
@@ -74,16 +70,16 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result1),
     
     %% Should not read pending update
-    Result2=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result2),
+    Result2=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
     Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label1, Key, 10}]),
     ?assertMatch(ok, Result3),
 
     %% Should read remote update
-    Result4 = eventual_read(ClientId2, Key, Node2, 10),
-    ?assertMatch({ok, 10}, Result4),
+    Result4 = eventual_read(Key, Node2, 10),
+    ?assertMatch({ok, {10, _Clock}}, Result4),
 
     %% First data then label
     %% Simulate remote arrival of update, to complete remote label
@@ -92,23 +88,21 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result5),
 
     %% Should not read pending update
-    Result6=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 10}, Result6),
+    Result6=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {10, _Clock2}}, Result6),
 
     %% Simulate remote arrival of label {Key, Clock, Node}
     Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_stream, [Label2], 1}]),
     ?assertMatch(ok, Result7),
 
     %% Should read remote update
-    Result8 = eventual_read(ClientId2, Key, Node2, 20),
-    ?assertMatch({ok, 20}, Result8).
+    Result8 = eventual_read(Key, Node2, 20),
+    ?assertMatch({ok, {20, _Clock3}}, Result8).
 
 converger_interleaving([Node1, Node2])->
     lager:info("Test started: converger_interleaving"),
 
     Key=3,
-    ClientId1 = client5,
-    ClientId2 = client6,
     
     %% First label then data
     %% Simulate remote arrival of label {Key, Clock, Node}
@@ -119,40 +113,40 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch(ok, Result1),
     
     %% Should not read pending update
-    Result2=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result2),
+    Result2=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
     Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label2, Key, 30}]),
     ?assertMatch(ok, Result3),
 
     %% Should not read pending update
-    Result4=rpc:call(Node1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result4),
+    Result4=rpc:call(Node1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result4),
 
     %% Simulate remote arrival of update, to complete remote label
     Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label1, Key, 20}]),
     ?assertMatch(ok, Result5),
 
     %% Should read remote update
-    Result6 = eventual_read(ClientId2, Key, Node2, 20),
-    ?assertMatch({ok, 20}, Result6),
+    Result6 = eventual_read(Key, Node2, 20),
+    ?assertMatch({ok, {20, _Clock1}}, Result6),
 
     %% Simulate remote arrival of label {Key, Clock, Node}
     Result7 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_stream, [Label2], 1}]),
     ?assertMatch(ok, Result7),
 
     %% Should read remote update
-    Result8 = eventual_read(ClientId2, Key, Node2, 30),
-    ?assertMatch({ok, 30}, Result8).
+    Result8 = eventual_read(Key, Node2, 30),
+    ?assertMatch({ok, {30, _Clock2}}, Result8).
 
-eventual_read(ClientId, Key, Node, ExpectedResult) ->
-    Result=rpc:call(Node, saturn_leaf, read, [ClientId, Key]),
+eventual_read(Key, Node, ExpectedResult) ->
+    Result=rpc:call(Node, saturn_leaf, read, [Key]),
     case Result of
-        {ok, ExpectedResult} -> Result;
+        {ok, {ExpectedResult, _Clock}} -> Result;
         _ ->
             lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
             timer:sleep(500),
-            eventual_read(ClientId, Key, Node, ExpectedResult)
+            eventual_read(Key, Node, ExpectedResult)
     end.
 
