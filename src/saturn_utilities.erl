@@ -4,7 +4,8 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([binary_search/3]).
+-export([binary_search/3,
+         now_microsec/0]).
 
 binary_search(List, N, Comparator) ->
     binary_search(List, N, Comparator, 0).
@@ -26,6 +27,11 @@ binary_search(List, N, Comparator, Carrying) ->
                     binary_search(lists:nthtail(Middle, List), N, Comparator, Carrying + Middle)           %% GT, search on right side
             end
     end.
+
+now_microsec()->
+    %% Not very efficient. os:timestamp() faster but non monotonic. Test!
+    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    (MegaSecs * 1000000 + Secs) * 1000000 + MicroSecs.
 
 -ifdef(TEST).
 

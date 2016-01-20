@@ -63,30 +63,17 @@ full_setup_test(Leaf1, Leaf2) ->
     lager:info("Test started: full_setup_test"),
 
     Key=1,
-    ClientId1 = client1,
-    ClientId2 = client2,
 
     %% Reading a key thats empty
-    Result1=rpc:call(Leaf1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, empty}, Result1),
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
 
     %% Update key
-    Result2=rpc:call(Leaf1, saturn_leaf, update, [ClientId1, Key, 3]),
-    ?assertMatch(ok, Result2),
+    Result2=rpc:call(Leaf1, saturn_leaf, update, [Key, 3, 0]),
+    ?assertMatch({ok, _Clock1}, Result2),
 
-    Result3=rpc:call(Leaf1, saturn_leaf, read, [ClientId1, Key]),
-    ?assertMatch({ok, 3}, Result3),
+    Result3=rpc:call(Leaf1, saturn_leaf, read, [Key]),
+    ?assertMatch({ok, {3, _Clock1}}, Result3),
 
-    Result4 = eventual_read(ClientId2, Key, Leaf2, 3),
-    ?assertMatch({ok, 3}, Result4).
-
-eventual_read(ClientId, Key, Node, ExpectedResult) ->
-    Result=rpc:call(Node, saturn_leaf, read, [ClientId, Key]),
-    case Result of
-        {ok, ExpectedResult} -> Result;
-        _ ->
-            lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
-            timer:sleep(500),
-            eventual_read(ClientId, Key, Node, ExpectedResult)
-    end.
-
+    Result4 = saturn_test_utilities:eventual_read(Key, Leaf2, 3),
+    ?assertMatch({ok, {3, _Clock1}}, Result4).

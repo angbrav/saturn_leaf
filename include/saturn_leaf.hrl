@@ -17,3 +17,5 @@
 
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
+
+-define(HEARTBEAT_FREQ, 1000).

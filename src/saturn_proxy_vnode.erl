@@ -21,60 +21,64 @@
          handle_coverage/4,
          handle_exit/3]).
 
--export([read/3,
+-export([read/2,
          update/4,
-         new_label/5,
-         notify_update/3,
+         propagate/4,
+         heartbeat/2,
          last_label/1,
+         update_completed/5,
          check_ready/1]).
 
 -record(state, {partition,
                 seq :: non_neg_integer(),
-                dreads_uid :: dict(),
-                dreads_counters :: dict(),
-                label_uid :: dict(),
+                max_ts,
                 last_label,
-                myid,
-                buffer :: queue()}).
+                myid}).
 
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
 
-last_label(ClientId) ->
-    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
+%Testing purposes
+last_label(Key) ->
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     riak_core_vnode_master:sync_command(IndexNode,
                                         last_label,
                                         ?PROXY_MASTER).
-read(Node, ClientId, Key) ->
+
+read(Node, Key) ->
     riak_core_vnode_master:sync_command(Node,
-                                        {read, ClientId, Key},
+                                        {read, Key},
                                         ?PROXY_MASTER).
-update(Node, ClientId, Key, Value) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {update, ClientId, Key, Value},
-                                        ?PROXY_MASTER).
-new_label(Node, UId, Label, Key, Value) ->
+heartbeat(Node, MyId) ->
     riak_core_vnode_master:command(Node,
-                                   {new_label, UId, Label, Key, Value},
+                                   {heartbeat, MyId},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-notify_update(Node, UId, Label) ->
+update_completed(Node, Key, Value, TimeStamp, Seq) ->
     riak_core_vnode_master:command(Node,
-                                   {update_completed, UId, Label},
+                                   {update_completed, Key, Value, TimeStamp, Seq},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
+    
+update(Node, Key, Value, Clock) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {update, Key, Value, Clock},
+                                        ?PROXY_MASTER).
+
+propagate(Node, Key, Value, TimeStamp) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {propagate, Key, Value, TimeStamp},
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
-    {ok, #state {partition=Partition,
-                 seq=0,
-                 dreads_uid=dict:new(),
-                 dreads_counters=dict:new(),
-                 label_uid=dict:new(),
-                 last_label=none,
-                 buffer=dict:new()}}.
+    {ok, #state{partition=Partition,
+                max_ts=0,
+                last_label=none,
+                seq=0}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -107,33 +111,20 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, ClientId, Key}, From, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0, seq=Seq0}) ->
-    Seq1 = Seq0 + 1,
-    UId = {ClientId, Seq1},
-    S1=S0#state{seq=Seq1},
-    case if_safe_read(ClientId, Key, S1) of
-        true ->
-            ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
-            {noreply, S1};
-        {false, ConflictingUpdates} ->
-            DReadsUId1 = lists:foldl(fun(ConflictingUId, Dict) ->
-                                        dict:append(ConflictingUId, UId, Dict)
-                                     end, DReadsUId0, ConflictingUpdates),
-            DReadsCounters1 = dict:store(UId, {length(ConflictingUpdates), From, Key}, DReadsCounters0),
-            {noreply, S1#state{dreads_counters=DReadsCounters1, dreads_uid=DReadsUId1}}
-    end;
+handle_command({read, Key}, From, S0) ->
+    ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
+    {noreply, S0};
 
-handle_command({update, ClientId, Key, Value}, _From, S0=#state{seq=Seq0, partition=Partition, myid=MyId}) ->
-    Seq1 = Seq0 + 1,
-    UId = {ClientId, Seq1},
-    S1=S0#state{seq=Seq1},
-    S2 = buffer_update(UId, Key, Value, S1),
-    saturn_leaf_producer:generate_label(MyId, {Partition, node()}, UId, Key, Value),
-    {reply, ok, S2};
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, seq=Seq0, partition=Partition}) ->
+    PhysicalClock = saturn_utilities:now_microsec(),
+    TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
+    Seq1=Seq0+1,
+    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, TimeStamp, Seq1}),
+    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, seq=Seq1, last_label={Key, TimeStamp, {Partition, node()}}}};
 
-handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_DReadsUId0, dreads_counters=_DReadsCounters0, buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
-    S0=S#state{last_label=Label},
-    {ClientId, _} = UId,
+handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{partition=Partition, myid=MyId}) ->
+    Label = {Key, TimeStamp, {Partition, node()}},
+    saturn_leaf_producer:new_label(MyId, Label, Partition, Seq),
     case groups_manager_serv:get_datanodes(Key) of
         {ok, Group} ->
             lists:foreach(fun({Host, Port}) ->
@@ -142,26 +133,19 @@ handle_command({new_label, UId, Label, Key, Value}, _From, S=#state{dreads_uid=_
         {error, Reason} ->
             lager:error("No replication group for key: ~p (~p)", [Key, Reason])
     end,
-    case dict:find(ClientId, Buffer0) of
-        {ok, Queue} ->
-            case queue:peek(Queue) of
-                {value, {UId, _, _}} ->
-                    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, Label, UId, {Partition, node()}}),
-                    {noreply, S0};
-                _Other ->
-                    LabelUId1 = dict:store(UId, Label, LabelUId0),
-                    {noreply, S0#state{label_uid=LabelUId1}}
-            end;
-        error ->
-            lager:error("There should be at least one entry in the queue"),
-            {noreply, S0}
-    end;
+    {noreply, S0};
 
-handle_command({update_completed, UId, Label}, _From, S0=#state{myid=MyId}) ->
-    saturn_leaf_producer:unblock_label(MyId, Label),
-    S1 = process_buffer(UId, S0),
-    S2 = process_pending_reads(UId, S1),
-    {noreply, S2};
+handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS0}) ->
+    MaxTS1 = max(TimeStamp, MaxTS0),
+    ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, TimeStamp}),
+    {reply, ok, S0#state{max_ts=MaxTS1}};
+    
+handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, seq=Seq0}) ->
+    Clock = saturn_utilities:now_microsec(),
+    Seq1 = Seq0 + 1,
+    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock, Seq1),
+    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
+    {noreply, S0#state{myid=MyId, seq=Seq1}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
@@ -202,105 +186,6 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
-process_pending_reads(UId, S0=#state{dreads_uid=DReadsUId0, dreads_counters=DReadsCounters0}) ->
-    case dict:find(UId, DReadsUId0) of
-        {ok, ListReads} ->
-            DReadsUId1 = dict:erase(UId, DReadsUId0),
-            DReadsCounters1 = lists:foldl(fun(ReadUId, Dict) ->
-                                            case Dict of
-                                                error ->
-                                                    error;
-                                                _ ->
-                                                    case dict:find(ReadUId, Dict) of
-                                                        {ok, {Counter, From, Key}} ->
-                                                            case Counter of
-                                                                1 ->
-                                                                    ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
-                                                                    dict:erase(ReadUId, Dict);
-                                                                _ ->
-                                                                    dict:store(ReadUId, {Counter-1, From, Key}, Dict)
-                                                            end;
-                                                        error ->
-                                                            error
-                                                    end
-                                            end
-                                          end, DReadsCounters0, ListReads),
-            case DReadsCounters1 of
-                error ->
-                    lager:error("Error of consistency between dreads_uid and dreads_counters"),
-                    S0;
-                _ ->
-                    S0#state{dreads_uid=DReadsUId1, dreads_counters=DReadsCounters1}
-            end;
-        error ->
-            lager:info("No reads waiting for uid: ~p", [UId]),
-            S0
-    end.
-
-process_buffer(UId, S0=#state{buffer=Buffer0, label_uid=LabelUId0, partition=Partition}) ->
-    {ClientId, _} = UId,
-    case dict:find(ClientId, Buffer0) of
-        {ok, Queue0} ->
-            case queue:peek(Queue0) of
-                {value, {UId, _, _}} ->
-                    Queue1 = queue:drop(Queue0),
-                    case queue:is_empty(Queue1) of
-                        false ->
-                            Buffer1 = dict:store(ClientId, Queue1, Buffer0),
-                            {value, {UIdNext, Key, Value}} = queue:peek(Queue1),
-                            case dict:find(UIdNext, LabelUId0) of
-                                {ok, Label} ->
-                                    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, Label, UIdNext, {Partition, node()}}),
-                                    LabelUId1 = dict:erase(UIdNext, LabelUId0),
-                                    S0#state{buffer=Buffer1, label_uid=LabelUId1};
-                                error ->
-                                    S0#state{buffer=Buffer1}
-                            end;
-                        true ->
-                            Buffer1 = dict:erase(ClientId, Buffer0),
-                            S0#state{buffer=Buffer1}
-                    end;
-                Other ->
-                    lager:error("Entry in the queue does not match the recently executed operation or is empty: ~p", [Other]),
-                    S0
-            end;
-        error ->
-            lager:error("There should be at least one entry in the queue"),
-            S0
-    end.
-
-if_safe_read(ClientId, Key, _S0=#state{buffer=Buffer}) ->
-    case dict:find(ClientId, Buffer) of
-        {ok, Queue} ->
-            List = lists:foldl(fun(Update, List0) ->
-                                {UId, KeyUpdate, _Value} = Update,
-                                case KeyUpdate of
-                                    Key ->
-                                        List0 ++ [UId];
-                                    _ ->
-                                        List0
-                                end
-                               end, [], queue:to_list(Queue)),
-            case length(List) of
-                0 ->
-                    true;
-                _ ->
-                    {false, List}
-            end;
-        error ->
-            true
-    end.
-
-buffer_update(UId, Key, Value, S0=#state{buffer=Buffer0}) ->
-    {ClientId, _Seq} = UId,
-    case dict:find(ClientId, Buffer0) of
-        {ok, Queue0} ->
-            Queue1 = queue:in({UId, Key, Value}, Queue0);
-        error ->
-            Queue1 = queue:in({UId, Key, Value}, queue:new())
-    end,
-    Buffer1 = dict:store(ClientId, Queue1, Buffer0),
-    S0#state{buffer=Buffer1}.
 
 check_myid(S0) ->
     Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
@@ -312,37 +197,3 @@ check_myid(S0) ->
             groups_manager_serv:set_myid(MyId),
             S0#state{myid=MyId}
     end.
-
-
--ifdef(TEST).
-if_safe_read_test() ->
-    ClientId1 = clientid1,
-    Key=3,
-    Q1 = queue:in({1, Key, value}, queue:new()),
-    Q2 = queue:in({2, 2, value}, Q1),
-    Q3 = queue:in({3, Key, value}, Q2),
-    D1 = dict:store(ClientId1, Q3, dict:new()),
-    ?assertEqual({false, [1,3]}, if_safe_read(ClientId1, Key, #state{buffer=D1})),
-    ?assertEqual({false, [2]}, if_safe_read(ClientId1, 2, #state{buffer=D1})),
-    ?assertEqual(true, if_safe_read(ClientId1, 4, #state{buffer=D1})),
-    ?assertEqual(true, if_safe_read(cid2, 4, #state{buffer=D1})).
-
-buffer_update_test() ->
-    UId1 = {client1, 2},
-    UId2 = {client2, 5},
-    %Test: Add operation to a client already in the buffer
-    D1 = dict:store(client1, queue:in(whatever, queue:new()), dict:new()),
-    #state{buffer=D2} = buffer_update(UId1, 4, 5, #state{buffer=D1}),
-    {{value, Elem1}, Queue2}  = queue:out(dict:fetch(client1, D2)),
-    ?assertEqual(whatever, Elem1),
-    {{value, Elem2}, Queue3}  = queue:out(Queue2),
-    ?assertEqual({UId1, 4, 5}, Elem2),
-    ?assertEqual(true, queue:is_empty(Queue3)),
-
-    %Test: Add operation to a client not present in the pbuffer
-    #state{buffer=D3} = buffer_update(UId2, 4, 5, #state{buffer=D2}),
-    {{value, Elem3}, Queue4}  = queue:out(dict:fetch(client2, D3)),
-    ?assertEqual({UId2, 4, 5}, Elem3),
-    ?assertEqual(true, queue:is_empty(Queue4)).
-
--endif.
