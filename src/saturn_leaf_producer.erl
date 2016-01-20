@@ -10,12 +10,13 @@
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([new_clock/2,
-         generate_label/5,
-         unblock_label/2]).
+-export([partition_heartbeat/4,
+         new_label/4]).
 
--record(state, {clock :: non_neg_integer(),
-                upstream :: list(),
+-record(state, {vclock :: dict(),
+                seqs :: dict(),
+                vclock_pending :: dict(),
+                labels :: list(),
                 myid}).
                 
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
@@ -23,70 +24,65 @@ reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
 start_link(MyId) ->
     gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
-new_clock(MyId, TS) ->
-    gen_server:call({global, reg_name(MyId)}, {new_clock, TS}, infinity).
-
-generate_label(MyId, Proxy, UId, Key, Value) ->
-    gen_server:cast({global, reg_name(MyId)}, {generate_label, Proxy, UId, Key, Value}).
-
-unblock_label(MyId, Label) ->
-    gen_server:cast({global, reg_name(MyId)}, {unblock_label, Label}).
+partition_heartbeat(MyId, Partition, Clock, Seq) ->
+    gen_server:cast({global, reg_name(MyId)}, {partition_heartbeat, Partition, Clock, Seq}).
+    
+new_label(MyId, Label, Partition, Seq) ->
+    gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition, Seq}).
 
 init([MyId]) ->
-    {ok, #state{clock=0, upstream=[], myid=MyId}}.
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    Dict = lists:foldl(fun(PrefList, Acc) ->
+                        {Partition, _Node} = hd(PrefList),
+                        saturn_proxy_vnode:heartbeat(PrefList, MyId),
+                        dict:store(Partition, 0, Acc)
+                       end, dict:new(), GrossPrefLists),
+    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, seqs=dict:new()}}.
 
-handle_call({new_clock, TS}, _From, S0=#state{clock=Clock0}) ->
-    Clock1 = max(TS, Clock0),
-    {reply, ok, S0#state{clock=Clock1}}.
-
-handle_cast({generate_label, Proxy, UId, Key, Value}, S0=#state{clock=Clock0, upstream=Upstream0}) ->
-    Clock1 = Clock0 + 1,
-    Label = {Key, Clock1, node()},
-    Upstream1 = Upstream0 ++ [{Label, blocked}],
-    saturn_proxy_vnode:new_label(Proxy, UId, Label, Key, Value),
-    {noreply, S0#state{clock=Clock1, upstream=Upstream1}};
-            
-handle_cast({unblock_label, Label}, S0=#state{upstream=Upstream0, myid=MyId}) ->
-    Index = saturn_utilities:binary_search(Upstream0, {Label, unblocked}, fun(Item1, Item2) ->
-                                                                    {{_K1, Clock1, _N1}, _} = Item1,
-                                                                    {{_K2, Clock2, _N2}, _} = Item2,
-                                                                    case Clock1>Clock2 of
-                                                                        true ->
-                                                                            greater;
-                                                                        false ->
-                                                                            case Clock1==Clock2 of
-                                                                                true ->
-                                                                                    equal;
-                                                                                false ->
-                                                                                    lesser
-                                                                            end
-                                                                    end
-                                                                end), 
-    Length = length(Upstream0),
-    case Index of
-        {ok, 1} ->
-            Upstream1 = lists:nthtail(1, Upstream0),
-            {Stream0, Upstream2} = generate_labels(Upstream1, [Label]),
-            lager:info("Generated stream: ~p",[Stream0]),
-            case groups_manager_serv:filter_stream_leaf(Stream0) of
-                {ok, [], _} ->
-                    noop;
-                {ok, _, no_indexnode} ->
-                    noop;
-                {ok, Stream1, {Host, Port}} ->
-                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream1, MyId}])
-            end;
-        {ok, Length} ->
-            Upstream2 = lists:droplast(Upstream0) ++ {Label, unblocked};
-        {ok, _} ->
-            Upstream2 = lists:sublist(Upstream0, Index-1) ++ [Label, unblocked] ++ lists:nthtail(Index, Upstream0);
-        {error, not_found} ->
-            Upstream2 = Upstream0,
-            lager:error("Binary search could not find the element")
+handle_cast({partition_heartbeat, Partition, Clock, Seq}, S0=#state{seqs=Seqs0}) ->
+    case dict:find(Partition, Seqs0) of
+        {ok, Value} ->
+            {StableSeq, PendingTS0} = Value;
+        error ->
+            {StableSeq, PendingTS0} = {0, []}
     end,
-    {noreply, S0#state{upstream=Upstream2}};
+    case ((StableSeq + 1) == Seq) of
+        true ->
+            S1 = update_vclock(Seq, PendingTS0, Partition, Clock, S0),
+            S2 = deliver_labels(S1);
+        false ->
+            PendingTS1 = orddict:store(Seq, Clock, PendingTS0),
+            Seqs1 = dict:store(Partition, {StableSeq, PendingTS1}, Seqs0),
+            S2 = S0#state{seqs=Seqs1}
+    end,
+    {noreply, S2};
+
+handle_cast({new_label, Label, Partition, Seq}, S0=#state{labels=Labels0, seqs=Seqs0}) ->
+    {_Key, TimeStamp, _Node} = Label,
+    case dict:find(Partition, Seqs0) of
+        {ok, Value} ->
+            {StableSeq, PendingTS0} = Value;
+        error ->
+            {StableSeq, PendingTS0} = {0, []}
+    end,
+    Labels1 = orddict:append(TimeStamp, Label, Labels0),
+    case ((StableSeq + 1) == Seq) of
+        true ->
+            S1 = update_vclock(Seq, PendingTS0, Partition, TimeStamp, S0#state{labels=Labels1}),
+            S2 = deliver_labels(S1);
+        false ->
+            PendingTS1 = orddict:store(Seq, TimeStamp, PendingTS0),
+            Seqs1 = dict:store(Partition, {StableSeq, PendingTS1}, Seqs0),
+            S2 = S0#state{labels=Labels1, seqs=Seqs1}
+    end,
+    {noreply, S2};
 
 handle_cast(_Info, State) ->
+    {noreply, State}.
+
+handle_call(Info, From, State) ->
+    lager:error("Weird message: ~p. From: ~p", [Info, From]),
     {noreply, State}.
 
 handle_info(Info, State) ->
@@ -99,25 +95,92 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-generate_labels([], Acc) ->
-    {Acc, []};
+update_vclock(StableSeq, [], Partition, TimeStamp, S0=#state{seqs=Seqs0, vclock=VClock0}) ->
+    VClock1 = dict:store(Partition, TimeStamp, VClock0),
+    Seqs1 = dict:store(Partition, {StableSeq, []}, Seqs0), 
+    S0#state{vclock=VClock1, seqs=Seqs1};
 
-generate_labels([H|T], Acc) ->
-    case H of
-        {Label, unblocked} ->
-            generate_labels(T, Acc ++ [Label]);
-        _ ->
-            {Acc, [H|T]}
+update_vclock(StableSeq0, [Next|Rest]=PendingTS, Partition, TimeStamp, S0=#state{seqs=Seqs0, vclock=VClock0}) ->
+    {NextSeq, NextTimeStamp} = Next,
+    case ((StableSeq0 + 1) == NextSeq) of
+        true ->
+            update_vclock(NextSeq, Rest, Partition, NextTimeStamp, S0);
+        false ->
+            VClock1 = dict:store(Partition, TimeStamp, VClock0),
+            Seqs1 = dict:store(Partition, {StableSeq0, PendingTS}, Seqs0), 
+            S0#state{vclock=VClock1, seqs=Seqs1}
+    end.
+
+deliver_labels(S0=#state{vclock=Clocks, labels=Labels0, myid=MyId}) ->
+    StableTime = compute_stable_time(Clocks),
+    Labels1 = filter_labels(Labels0, StableTime, MyId),
+    S0#state{labels=Labels1}.
+
+compute_stable_time(Clocks) ->
+    ListClocks = dict:to_list(Clocks),
+    [First|Rest] = ListClocks,
+    {_FirstPartition, FirstClock} = First,
+    lists:foldl(fun({_Partition, Clock}, Min) ->
+                    case Clock<Min of
+                        true ->
+                            Clock;
+                        false ->
+                            Min
+                    end
+                end, FirstClock, Rest). 
+
+filter_labels([], _StableTime, _MyId)->
+    [];
+
+filter_labels([H|Rest], StableTime, MyId) ->
+    {TimeStamp, ListLabels} = H,
+    case TimeStamp =< StableTime of
+        true ->
+            case groups_manager_serv:filter_stream_leaf(ListLabels) of
+                {ok, [], _} ->
+                    noop;
+                {ok, _, no_indexnode} ->
+                    noop;
+                {ok, Stream, {Host, Port}} ->
+                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
+            end,
+            filter_labels(Rest, StableTime, MyId);
+        false ->
+            [H|Rest]
     end.
 
 -ifdef(TEST).
 
-generate_labels_test() ->
-    List1 = [{1, unblocked},{2, unblocked},{3, blocked},{4, unblocked}],
-    ?assertEqual({[1,2], [{3, blocked},{4, unblocked}]}, generate_labels(List1, [])),
-    List2 = [{1, blocked},{2, unblocked},{3, blocked},{4, unblocked}],
-    ?assertEqual({[], List2}, generate_labels(List2, [])),
-    List3 = [{1, unblocked},{2, unblocked},{3, unblocked},{4, unblocked}],
-    ?assertEqual({[1,2,3,4], []}, generate_labels(List3, [])).
+compute_stable_clock_test() ->
+    Clocks = [{p1, 1}, {p2, 2}, {p3, 4}],
+    Dict = dict:from_list(Clocks),
+    ?assertEqual(1, compute_stable_time(Dict)).
+
+update_vclock_test() ->
+    StableSeq0 = 3,
+    PendingTS = [{4, 7}, {5, 11}, {8, 18}, {9, 31}],
+    Partition = part1,
+    TimeStamp = 6,
+    S = update_vclock(StableSeq0, PendingTS, Partition, TimeStamp, #state{seqs=dict:new(), vclock=dict:new()}),
+    Seqs1 = S#state.seqs,
+    VClock1 = S#state.vclock,
+    
+    {StableSeq1, PendingTS1} = dict:fetch(Partition, Seqs1),
+    TS1 = dict:fetch(Partition, VClock1),
+    
+    ?assertEqual(5, StableSeq1),
+    ?assertEqual([{8, 18}, {9, 31}], PendingTS1),
+    ?assertEqual(11, TS1),
+
+    S2 = update_vclock(6, [{8, 18}, {9, 31}], Partition, 15, S),
+    Seqs2 = S2#state.seqs,
+    VClock2 = S2#state.vclock,
+    
+    {StableSeq2, PendingTS2} = dict:fetch(Partition, Seqs2),
+    TS2 = dict:fetch(Partition, VClock2),
+    
+    ?assertEqual(6, StableSeq2),
+    ?assertEqual([{8, 18}, {9, 31}], PendingTS2),
+    ?assertEqual(15, TS2).
 
 -endif.

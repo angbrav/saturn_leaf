@@ -5,7 +5,7 @@
 -export([
          ping/0,
          update/3,
-         read/2
+         read/1
         ]).
 
 %% Public API
@@ -17,14 +17,14 @@ ping() ->
     [{IndexNode, _Type}] = PrefList,
     riak_core_vnode_master:sync_spawn_command(IndexNode, ping, ?PROXY_MASTER).
 
-update(ClientId, Key, Value) ->
-    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
+update(Key, Value, Clock) ->
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:update(IndexNode, ClientId, Key, Value).
+    saturn_proxy_vnode:update(IndexNode, Key, Value, Clock).
     
-read(ClientId, Key) ->
-    DocIdx = riak_core_util:chash_key({?BUCKET, ClientId}),
+read(Key) ->
+    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:read(IndexNode, ClientId, Key).
+    saturn_proxy_vnode:read(IndexNode, Key).

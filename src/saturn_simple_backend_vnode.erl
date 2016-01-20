@@ -18,7 +18,8 @@
          handle_exit/3]).
 
 -export([read/2,
-         update/3]).
+         update/3,
+         propagation/3]).
 
 -record(state, {partition,
                 kv}).
@@ -35,22 +36,36 @@ update(Node, Key, Value) ->
     riak_core_vnode_master:sync_command(Node,
                                         {update, Key, Value},
                                         ?SIMPLE_MASTER).
+
+propagation(Node, Key, Value) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {propagation, Key, Value},
+                                        ?SIMPLE_MASTER).
 init([Partition]) ->
     {ok, #state {partition=Partition,
                  kv=dict:new()
                  }}.
 
-handle_command({read, Key}, _From, S0=#state{kv=KV}) ->
-    case dict:find(Key, KV) of
-        {ok, Value} ->
-            {reply, {ok, Value}, S0};
-        error ->
-            {reply, {ok, empty}, S0}
-    end;
+handle_command({read, Key}, _From, S0) ->
+    {reply, do_read(Key, S0), S0};
 
-handle_command({update, Key, Value}, _From, S0=#state{kv=KV0}) ->
-    KV1 = dict:store(Key, Value, KV0),
-    {reply, ok, S0#state{kv=KV1}};
+handle_command({propagation, Key, {Value, TimeStamp}}, _From, S0) ->
+    case do_read(Key, S0) of
+        {ok, {empty, 0}} ->
+            S1 = do_write(Key, {Value, TimeStamp}, S0);
+        {ok, {_OldValue, Version}} ->
+            case Version < TimeStamp of
+                true ->
+                    S1 = do_write(Key, {Value, TimeStamp}, S0);
+                false ->
+                    S1 = S0
+            end
+    end,
+    {reply, ok, S1};
+
+handle_command({update, Key, {Value, TimeStamp}}, _From, S0) ->
+    S1 = do_write(Key, {Value, TimeStamp}, S0),
+    {reply, ok, S1};
 
 %% Sample command: respond to a ping
 handle_command(ping, _Sender, State) ->
@@ -92,3 +107,15 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
+
+do_read(Key, _S0=#state{kv=KV}) ->
+    case dict:find(Key, KV) of
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            {ok, {empty, 0}}
+    end.
+
+do_write(Key, {Value, TimeStamp}, S0=#state{kv=KV0}) ->
+    KV1 = dict:store(Key, {Value, TimeStamp}, KV0),
+    S0#state{kv=KV1}.

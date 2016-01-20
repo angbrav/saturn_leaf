@@ -46,12 +46,14 @@ select_operation(timeout, State=#state{operation=Operation}) ->
 
 update(timeout, State=#state{payload=Payload})->
     lager:info("Connector received an update"),
-    {Key, Value, Label, UId, VNode} = Payload,
+    {Key, Value, TimeStamp, Seq} = Payload,
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    ok = saturn_simple_backend_vnode:update(IndexNode, Key, Value),
-    saturn_proxy_vnode:notify_update(VNode, UId, Label),
+    PrefListStore = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
+    PrefListProxy = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNodeStore, _TypeStore}] = PrefListStore,
+    [{IndexNodeProxy, _TypeProxy}] = PrefListProxy,
+    ok = saturn_simple_backend_vnode:update(IndexNodeStore, Key, {Value, TimeStamp}),
+    saturn_proxy_vnode:update_completed(IndexNodeProxy, Key, Value, TimeStamp, Seq),
     {next_state, stop, State#state{reason=normal},0}.
 
 read(timeout, State=#state{payload=Payload})->
@@ -64,12 +66,11 @@ read(timeout, State=#state{payload=Payload})->
     {next_state, stop, State#state{reason=normal},0}.
 
 propagation(timeout, State=#state{payload=Payload})->
-    {Key, Value, Label, UName} = Payload,
+    {Key, Value, TimeStamp} = Payload,
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    ok = saturn_simple_backend_vnode:update(IndexNode, Key, Value),
-    saturn_leaf_converger:notify_update(UName, Label),
+    ok = saturn_simple_backend_vnode:propagation(IndexNode, Key, {Value, TimeStamp}),
     {next_state, stop, State#state{reason=normal},0}.
 
 stop(timeout, State=#state{reason=Reason}) ->
