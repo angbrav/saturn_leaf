@@ -27,14 +27,12 @@
          heartbeat/2,
          last_label/1,
          update_completed/5,
-         send_label_delay/5,
          check_ready/1]).
 
 -record(state, {partition,
                 seq :: non_neg_integer(),
                 max_ts,
                 last_label,
-                delay,
                 myid}).
 
 %% API
@@ -80,7 +78,6 @@ init([Partition]) ->
     {ok, #state{partition=Partition,
                 max_ts=0,
                 last_label=none,
-                delay=100,
                 seq=0}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
@@ -125,9 +122,9 @@ handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, seq=
     ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, TimeStamp, Seq1}),
     {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, seq=Seq1, last_label={Key, TimeStamp, {Partition, node()}}}};
 
-handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{partition=Partition, myid=MyId, delay=Delay}) ->
+handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{partition=Partition, myid=MyId}) ->
     Label = {Key, TimeStamp, {Partition, node()}},
-    spawn(saturn_proxy_vnode, send_label_delay, [MyId, Label, Partition, Seq, Delay]),
+    saturn_leaf_producer:new_label(MyId, Label, Partition, Seq),
     case groups_manager_serv:get_datanodes(Key) of
         {ok, Group} ->
             lists:foreach(fun({Host, Port}) ->
@@ -189,10 +186,6 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
-
-send_label_delay(MyId, Label, Partition, Seq, Delay) ->
-    timer:sleep(Delay),
-    saturn_leaf_producer:new_label(MyId, Label, Partition, Seq).
 
 check_myid(S0) ->
     Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
