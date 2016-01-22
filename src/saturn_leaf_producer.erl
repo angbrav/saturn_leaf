@@ -175,8 +175,8 @@ filter_labels([H|Rest], StableTime, MyId, Delay) ->
                 [] ->
                     filter_labels(Rest, StableTime, MyId, Delay);
                 _ ->
-                    lists:foreach(fun(Element) ->
-                                    spawn(saturn_leaf_producer, delayed_delivery, [MyId, Delay, Element])
+                    lists:foreach(fun({Time, _Label}=Element) ->
+                                    spawn(saturn_leaf_producer, delayed_delivery, [MyId, (Time+Delay)-saturn_utilities:now_milisec(), Element])
                                   end, Leftovers),
                     [{TimeStamp, Leftovers}|Rest]
             end;
@@ -185,7 +185,12 @@ filter_labels([H|Rest], StableTime, MyId, Delay) ->
     end.
 
 delayed_delivery(MyId, Delay, {Time, Label}) ->
-    timer:sleep(Delay),
+    case Delay>0 of
+        true ->
+            timer:sleep(trunc(Delay));
+        false ->
+            noop
+    end,
     case groups_manager_serv:filter_stream_leaf([Label]) of
         {ok, [], _} ->
             noop;
