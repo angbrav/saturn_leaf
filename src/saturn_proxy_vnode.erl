@@ -140,12 +140,12 @@ handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS
     ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, TimeStamp}),
     {reply, ok, S0#state{max_ts=MaxTS1}};
     
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, seq=Seq0}) ->
-    Clock = saturn_utilities:now_microsec(),
+handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, seq=Seq0, max_ts=MaxTS0}) ->
+    Clock = max(saturn_utilities:now_microsec(), MaxTS0),
     Seq1 = Seq0 + 1,
     saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock, Seq1),
     riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, seq=Seq1}};
+    {noreply, S0#state{myid=MyId, seq=Seq1, max_ts=Clock}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
