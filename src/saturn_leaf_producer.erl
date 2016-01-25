@@ -10,12 +10,10 @@
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([partition_heartbeat/4,
-         new_label/4]).
+-export([partition_heartbeat/3,
+         new_label/3]).
 
 -record(state, {vclock :: dict(),
-                seqs :: dict(),
-                vclock_pending :: dict(),
                 labels :: list(),
                 myid}).
                 
@@ -24,11 +22,11 @@ reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
 start_link(MyId) ->
     gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
-partition_heartbeat(MyId, Partition, Clock, Seq) ->
-    gen_server:cast({global, reg_name(MyId)}, {partition_heartbeat, Partition, Clock, Seq}).
+partition_heartbeat(MyId, Partition, Clock) ->
+    gen_server:cast({global, reg_name(MyId)}, {partition_heartbeat, Partition, Clock}).
     
-new_label(MyId, Label, Partition, Seq) ->
-    gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition, Seq}).
+new_label(MyId, Label, Partition) ->
+    gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition}).
 
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -40,25 +38,12 @@ init([MyId]) ->
                        end, dict:new(), GrossPrefLists),
     {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, seqs=dict:new()}}.
 
-handle_cast({partition_heartbeat, Partition, Clock, Seq}, S0=#state{seqs=Seqs0}) ->
-    case dict:find(Partition, Seqs0) of
-        {ok, Value} ->
-            {StableSeq, PendingTS0} = Value;
-        error ->
-            {StableSeq, PendingTS0} = {0, []}
-    end,
-    case ((StableSeq + 1) == Seq) of
-        true ->
-            S1 = update_vclock(Seq, PendingTS0, Partition, Clock, S0),
-            S2 = deliver_labels(S1);
-        false ->
-            PendingTS1 = orddict:store(Seq, Clock, PendingTS0),
-            Seqs1 = dict:store(Partition, {StableSeq, PendingTS1}, Seqs0),
-            S2 = S0#state{seqs=Seqs1}
-    end,
+handle_cast({partition_heartbeat, Partition, Clock}, S0}) ->
+    S1 = update_vclock(Seq, PendingTS0, Partition, Clock, S0),
+    S2 = deliver_labels(S1);
     {noreply, S2};
 
-handle_cast({new_label, Label, Partition, Seq}, S0=#state{labels=Labels0, seqs=Seqs0}) ->
+handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
     {_Key, TimeStamp, _Node} = Label,
     case dict:find(Partition, Seqs0) of
         {ok, Value} ->
