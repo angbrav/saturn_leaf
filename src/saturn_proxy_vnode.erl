@@ -69,7 +69,7 @@ propagate(Node, Key, Value, TimeStamp) ->
 init([Partition]) ->
     {ok, #state{partition=Partition,
                 max_ts=0,
-                last_label=none,
+                last_label=none
                }}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
@@ -103,11 +103,11 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, Key}, From, S0) ->
-    {ok, Value} = ?BACKEND_CONNECTOR:read({Key, From}),
+handle_command({read, Key}, _From, S0) ->
+    {ok, Value} = ?BACKEND_CONNECTOR:read({Key}),
     {reply, {ok, Value}, S0};
 
-handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition}) ->
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
     ok = ?BACKEND_CONNECTOR:update({Key, Value, TimeStamp}),
@@ -122,7 +122,6 @@ handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, part
             lager:error("No replication group for key: ~p (~p)", [Key, Reason])
     end,
     {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, last_label=Label}};
-    {noreply, S0};
 
 handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS0}) ->
     MaxTS1 = max(TimeStamp, MaxTS0),
