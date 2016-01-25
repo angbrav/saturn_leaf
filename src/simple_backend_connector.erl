@@ -8,24 +8,22 @@
         ]).
 
 update(Payload)->
-    {Key, Value, TimeStamp, Seq} = Payload,
-    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
-    PrefListStore = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
-    PrefListProxy = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNodeStore, _TypeStore}] = PrefListStore,
-    [{IndexNodeProxy, _TypeProxy}] = PrefListProxy,
-    saturn_simple_backend_vnode:update(IndexNodeStore, Key, {Value, TimeStamp}).
+    {Key, Value, TimeStamp} = Payload,
+    IndexNode = get_indexnode(Key),
+    saturn_simple_backend_vnode:update(IndexNode, Key, {Value, TimeStamp}).
 
 read(Payload)->
-    {Key, Client} = Payload,
-    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
+    {Key} = Payload,
+    IndexNode = get_indexnode(Key),
     saturn_simple_backend_vnode:read(IndexNode, Key).
 
 propagation(Payload)->
     {Key, Value, TimeStamp} = Payload,
+    IndexNode = get_indexnode(Key),
+    saturn_simple_backend_vnode:propagation(IndexNode, Key, {Value, TimeStamp}).
+
+get_indexnode(Key) ->
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_simple_backend_vnode:propagation(IndexNode, Key, {Value, TimeStamp}).
+    IndexNode.
