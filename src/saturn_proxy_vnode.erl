@@ -26,11 +26,9 @@
          propagate/4,
          heartbeat/2,
          last_label/1,
-         update_completed/5,
          check_ready/1]).
 
 -record(state, {partition,
-                seq :: non_neg_integer(),
                 max_ts,
                 last_label,
                 myid}).
@@ -58,12 +56,6 @@ heartbeat(Node, MyId) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-update_completed(Node, Key, Value, TimeStamp, Seq) ->
-    riak_core_vnode_master:command(Node,
-                                   {update_completed, Key, Value, TimeStamp, Seq},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
-    
 update(Node, Key, Value, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {update, Key, Value, Clock},
@@ -77,8 +69,8 @@ propagate(Node, Key, Value, TimeStamp) ->
 init([Partition]) ->
     {ok, #state{partition=Partition,
                 max_ts=0,
-                last_label=none,
-                seq=0}}.
+                last_label=none
+               }}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -111,20 +103,16 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, Key}, From, S0) ->
-    ?BACKEND_CONNECTOR_FSM:start_link(read, {Key, From}),
-    {noreply, S0};
+handle_command({read, Key}, _From, S0) ->
+    {ok, Value} = ?BACKEND_CONNECTOR:read({Key}),
+    {reply, {ok, Value}, S0};
 
-handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, seq=Seq0, partition=Partition}) ->
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-    Seq1=Seq0+1,
-    ?BACKEND_CONNECTOR_FSM:start_link(update, {Key, Value, TimeStamp, Seq1}),
-    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, seq=Seq1, last_label={Key, TimeStamp, {Partition, node()}}}};
-
-handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{partition=Partition, myid=MyId}) ->
+    ok = ?BACKEND_CONNECTOR:update({Key, Value, TimeStamp}),
     Label = {Key, TimeStamp, {Partition, node()}},
-    saturn_leaf_producer:new_label(MyId, Label, Partition, Seq),
+    saturn_leaf_producer:new_label(MyId, Label, Partition),
     case groups_manager_serv:get_datanodes(Key) of
         {ok, Group} ->
             lists:foreach(fun({Host, Port}) ->
@@ -133,19 +121,18 @@ handle_command({update_completed, Key, Value, TimeStamp, Seq}, _From, S0=#state{
         {error, Reason} ->
             lager:error("No replication group for key: ~p (~p)", [Key, Reason])
     end,
-    {noreply, S0};
+    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, last_label=Label}};
 
 handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS0}) ->
     MaxTS1 = max(TimeStamp, MaxTS0),
-    ?BACKEND_CONNECTOR_FSM:start_link(propagation, {Key, Value, TimeStamp}),
+    ?BACKEND_CONNECTOR:propagation({Key, Value, TimeStamp}),
     {reply, ok, S0#state{max_ts=MaxTS1}};
     
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, seq=Seq0}) ->
-    Clock = saturn_utilities:now_microsec(),
-    Seq1 = Seq0 + 1,
-    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock, Seq1),
+handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
+    Clock = max(saturn_utilities:now_microsec(), MaxTS0),
+    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
     riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, seq=Seq1}};
+    {noreply, S0#state{myid=MyId, max_ts=Clock}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};

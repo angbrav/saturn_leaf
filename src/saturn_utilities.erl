@@ -5,6 +5,7 @@
 -endif.
 
 -export([binary_search/3,
+         now_milisec/0,
          now_microsec/0]).
 
 binary_search(List, N, Comparator) ->
@@ -32,6 +33,9 @@ now_microsec()->
     %% Not very efficient. os:timestamp() faster but non monotonic. Test!
     {MegaSecs, Secs, MicroSecs} = erlang:now(),
     (MegaSecs * 1000000 + Secs) * 1000000 + MicroSecs.
+
+now_milisec() ->
+    now_microsec()/1000.
 
 -ifdef(TEST).
 
