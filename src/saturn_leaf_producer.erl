@@ -11,9 +11,12 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([partition_heartbeat/3,
+         delayed_delivery/3,
+         label_delivered/2,
          new_label/3]).
 
 -record(state, {vclock :: dict(),
+                delay,
                 labels :: list(),
                 myid}).
                 
@@ -28,6 +31,9 @@ partition_heartbeat(MyId, Partition, Clock) ->
 new_label(MyId, Label, Partition) ->
     gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition}).
 
+label_delivered(MyId, Element) ->
+    gen_server:cast({global, reg_name(MyId)}, {label_delivered, Element}).
+
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
@@ -36,7 +42,7 @@ init([MyId]) ->
                         saturn_proxy_vnode:heartbeat(PrefList, MyId),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
-    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, seqs=dict:new()}}.
+    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, seqs=dict:new(), delay=100}}.
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0}) ->
     S1 = update_vclock(Seq, PendingTS0, Partition, Clock, S0),
@@ -44,6 +50,7 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0}) ->
     {noreply, S2};
 
 handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
+    Now = saturn_utilities:now_milisec(),
     {_Key, TimeStamp, _Node} = Label,
     case dict:find(Partition, Seqs0) of
         {ok, Value} ->
@@ -51,7 +58,7 @@ handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
         error ->
             {StableSeq, PendingTS0} = {0, []}
     end,
-    Labels1 = orddict:append(TimeStamp, Label, Labels0),
+    Labels1 = orddict:append(TimeStamp, {Now, Label}, Labels0),
     case ((StableSeq + 1) == Seq) of
         true ->
             S1 = update_vclock(Seq, PendingTS0, Partition, TimeStamp, S0#state{labels=Labels1}),
@@ -63,6 +70,17 @@ handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
     end,
     {noreply, S2};
 
+handle_cast({label_delivered, Element}, S0=#state{labels=Labels0})->
+    [{TimeStamp, ListLabels}|Rest] = Labels0,
+    case lists:delete(Element, ListLabels) of
+        [] ->
+            S1 = deliver_labels(S0#state{labels=Rest});
+        Other ->
+            Labels1 = [{TimeStamp, Other}] ++ Rest,
+            S1 = S0#state{labels=Labels1}
+    end,
+    {noreply, S1};
+    
 handle_cast(_Info, State) ->
     {noreply, State}.
 
@@ -96,9 +114,9 @@ update_vclock(StableSeq0, [Next|Rest]=PendingTS, Partition, TimeStamp, S0=#state
             S0#state{vclock=VClock1, seqs=Seqs1}
     end.
 
-deliver_labels(S0=#state{vclock=Clocks, labels=Labels0, myid=MyId}) ->
+deliver_labels(S0=#state{vclock=Clocks, labels=Labels0, myid=MyId, delay=Delay}) ->
     StableTime = compute_stable_time(Clocks),
-    Labels1 = filter_labels(Labels0, StableTime, MyId),
+    Labels1 = filter_labels(Labels0, StableTime, MyId, Delay),
     S0#state{labels=Labels1}.
 
 compute_stable_time(Clocks) ->
@@ -114,14 +132,23 @@ compute_stable_time(Clocks) ->
                     end
                 end, FirstClock, Rest). 
 
-filter_labels([], _StableTime, _MyId)->
+filter_labels([], _StableTime, _MyId, _Delay)->
     [];
 
-filter_labels([H|Rest], StableTime, MyId) ->
+filter_labels([H|Rest], StableTime, MyId, Delay) ->
     {TimeStamp, ListLabels} = H,
     case TimeStamp =< StableTime of
         true ->
-            case groups_manager_serv:filter_stream_leaf(ListLabels) of
+            Now = saturn_utilities:now_milisec(),
+            {FinalStream, Leftovers} = lists:foldl(fun({Time, Label}, {FinalStream0, Leftovers0}) ->
+                                                case (Time + Delay) > Now of
+                                                    true ->
+                                                        {FinalStream0, Leftovers0 ++ [{Time, Label}]};
+                                                    false ->
+                                                        {FinalStream0 ++ [Label], Leftovers0 }
+                                                end
+                                              end, {[], []}, ListLabels),
+            case groups_manager_serv:filter_stream_leaf(FinalStream) of
                 {ok, [], _} ->
                     noop;
                 {ok, _, no_indexnode} ->
@@ -129,10 +156,35 @@ filter_labels([H|Rest], StableTime, MyId) ->
                 {ok, Stream, {Host, Port}} ->
                     saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
             end,
-            filter_labels(Rest, StableTime, MyId);
+            case Leftovers of
+                [] ->
+                    filter_labels(Rest, StableTime, MyId, Delay);
+                _ ->
+                    lists:foreach(fun({Time, _Label}=Element) ->
+                                    spawn(saturn_leaf_producer, delayed_delivery, [MyId, (Time+Delay)-saturn_utilities:now_milisec(), Element])
+                                  end, Leftovers),
+                    [{TimeStamp, Leftovers}|Rest]
+            end;
         false ->
             [H|Rest]
     end.
+
+delayed_delivery(MyId, Delay, {Time, Label}) ->
+    case Delay>0 of
+        true ->
+            timer:sleep(trunc(Delay));
+        false ->
+            noop
+    end,
+    case groups_manager_serv:filter_stream_leaf([Label]) of
+        {ok, [], _} ->
+            noop;
+        {ok, _, no_indexnode} ->
+            noop;
+        {ok, Stream, {Host, Port}} ->
+            saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
+    end,
+    saturn_leaf_producer:label_delivered(MyId, {Time, Label}).
 
 -ifdef(TEST).
 
