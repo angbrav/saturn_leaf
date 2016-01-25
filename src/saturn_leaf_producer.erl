@@ -42,32 +42,19 @@ init([MyId]) ->
                         saturn_proxy_vnode:heartbeat(PrefList, MyId),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
-    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, seqs=dict:new(), delay=100}}.
+    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, delay=100}}.
 
-handle_cast({partition_heartbeat, Partition, Clock}, S0}) ->
-    S1 = update_vclock(Seq, PendingTS0, Partition, Clock, S0),
-    S2 = deliver_labels(S1);
+handle_cast({partition_heartbeat, Partition, Clock}, S0) ->
+    S1 = update_vclock(Partition, Clock, S0),
+    S2 = deliver_labels(S1),
     {noreply, S2};
 
 handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
     Now = saturn_utilities:now_milisec(),
     {_Key, TimeStamp, _Node} = Label,
-    case dict:find(Partition, Seqs0) of
-        {ok, Value} ->
-            {StableSeq, PendingTS0} = Value;
-        error ->
-            {StableSeq, PendingTS0} = {0, []}
-    end,
     Labels1 = orddict:append(TimeStamp, {Now, Label}, Labels0),
-    case ((StableSeq + 1) == Seq) of
-        true ->
-            S1 = update_vclock(Seq, PendingTS0, Partition, TimeStamp, S0#state{labels=Labels1}),
-            S2 = deliver_labels(S1);
-        false ->
-            PendingTS1 = orddict:store(Seq, TimeStamp, PendingTS0),
-            Seqs1 = dict:store(Partition, {StableSeq, PendingTS1}, Seqs0),
-            S2 = S0#state{labels=Labels1, seqs=Seqs1}
-    end,
+    S1 = update_vclock(Partition, TimeStamp, S0#state{labels=Labels1}),
+    S2 = deliver_labels(S1),
     {noreply, S2};
 
 handle_cast({label_delivered, Element}, S0=#state{labels=Labels0})->
@@ -98,21 +85,9 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-update_vclock(StableSeq, [], Partition, TimeStamp, S0=#state{seqs=Seqs0, vclock=VClock0}) ->
+update_vclock(Partition, TimeStamp, S0=#state{vclock=VClock0}) ->
     VClock1 = dict:store(Partition, TimeStamp, VClock0),
-    Seqs1 = dict:store(Partition, {StableSeq, []}, Seqs0), 
-    S0#state{vclock=VClock1, seqs=Seqs1};
-
-update_vclock(StableSeq0, [Next|Rest]=PendingTS, Partition, TimeStamp, S0=#state{seqs=Seqs0, vclock=VClock0}) ->
-    {NextSeq, NextTimeStamp} = Next,
-    case ((StableSeq0 + 1) == NextSeq) of
-        true ->
-            update_vclock(NextSeq, Rest, Partition, NextTimeStamp, S0);
-        false ->
-            VClock1 = dict:store(Partition, TimeStamp, VClock0),
-            Seqs1 = dict:store(Partition, {StableSeq0, PendingTS}, Seqs0), 
-            S0#state{vclock=VClock1, seqs=Seqs1}
-    end.
+    S0#state{vclock=VClock1}.
 
 deliver_labels(S0=#state{vclock=Clocks, labels=Labels0, myid=MyId, delay=Delay}) ->
     StableTime = compute_stable_time(Clocks),
@@ -192,32 +167,5 @@ compute_stable_clock_test() ->
     Clocks = [{p1, 1}, {p2, 2}, {p3, 4}],
     Dict = dict:from_list(Clocks),
     ?assertEqual(1, compute_stable_time(Dict)).
-
-update_vclock_test() ->
-    StableSeq0 = 3,
-    PendingTS = [{4, 7}, {5, 11}, {8, 18}, {9, 31}],
-    Partition = part1,
-    TimeStamp = 6,
-    S = update_vclock(StableSeq0, PendingTS, Partition, TimeStamp, #state{seqs=dict:new(), vclock=dict:new()}),
-    Seqs1 = S#state.seqs,
-    VClock1 = S#state.vclock,
-    
-    {StableSeq1, PendingTS1} = dict:fetch(Partition, Seqs1),
-    TS1 = dict:fetch(Partition, VClock1),
-    
-    ?assertEqual(5, StableSeq1),
-    ?assertEqual([{8, 18}, {9, 31}], PendingTS1),
-    ?assertEqual(11, TS1),
-
-    S2 = update_vclock(6, [{8, 18}, {9, 31}], Partition, 15, S),
-    Seqs2 = S2#state.seqs,
-    VClock2 = S2#state.vclock,
-    
-    {StableSeq2, PendingTS2} = dict:fetch(Partition, Seqs2),
-    TS2 = dict:fetch(Partition, VClock2),
-    
-    ?assertEqual(6, StableSeq2),
-    ?assertEqual([{8, 18}, {9, 31}], PendingTS2),
-    ?assertEqual(15, TS2).
 
 -endif.
