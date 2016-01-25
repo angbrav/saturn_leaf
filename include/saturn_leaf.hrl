@@ -13,7 +13,7 @@
 -define(GROUPSFILE_TEST, "../include/groups_file_test.saturn").
 
 -define(BACKEND, simple_backend).
--define(BACKEND_CONNECTOR_FSM, simple_backend_connector_fsm).
+-define(BACKEND_CONNECTOR, simple_backend_connector).
 
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
