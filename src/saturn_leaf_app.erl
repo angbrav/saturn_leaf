@@ -19,7 +19,9 @@ start(_StartType, _StartArgs) ->
             case ?BACKEND of
                 simple_backend ->
                     ok = riak_core:register([{vnode_module, saturn_simple_backend_vnode}]),
-                    ok = riak_core_node_watcher:service_up(?SIMPLE_SERVICE, self())
+                    ok = riak_core_node_watcher:service_up(?SIMPLE_SERVICE, self());
+                _ ->
+                    noop
             end,
 
             ok = riak_core_ring_events:add_guarded_handler(saturn_leaf_ring_event_handler, []),

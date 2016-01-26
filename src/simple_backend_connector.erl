@@ -2,22 +2,23 @@
 
 -include("saturn_leaf.hrl").
 
--export([update/1,
-         read/1,
-         propagation/1
+-export([update/2,
+         read/2,
+         propagation/2,
+         connect/0
         ]).
 
-update(Payload)->
+update(_Connector, Payload)->
     {Key, Value, TimeStamp} = Payload,
     IndexNode = get_indexnode(Key),
     saturn_simple_backend_vnode:update(IndexNode, Key, {Value, TimeStamp}).
 
-read(Payload)->
+read(_Connector, Payload)->
     {Key} = Payload,
     IndexNode = get_indexnode(Key),
     saturn_simple_backend_vnode:read(IndexNode, Key).
 
-propagation(Payload)->
+propagation(_Connector, Payload)->
     {Key, Value, TimeStamp} = Payload,
     IndexNode = get_indexnode(Key),
     saturn_simple_backend_vnode:propagation(IndexNode, Key, {Value, TimeStamp}).
@@ -27,3 +28,6 @@ get_indexnode(Key) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     IndexNode.
+
+connect() ->
+    ok.

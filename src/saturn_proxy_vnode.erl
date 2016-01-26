@@ -30,6 +30,7 @@
 
 -record(state, {partition,
                 max_ts,
+                connector,
                 last_label,
                 myid}).
 
@@ -67,9 +68,11 @@ propagate(Node, Key, Value, TimeStamp) ->
                                         ?PROXY_MASTER).
 
 init([Partition]) ->
+    Connector = ?BACKEND_CONNECTOR:connect(),
     {ok, #state{partition=Partition,
                 max_ts=0,
-                last_label=none
+                last_label=none,
+                connector=Connector
                }}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
@@ -103,14 +106,14 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, Key}, _From, S0) ->
-    {ok, Value} = ?BACKEND_CONNECTOR:read({Key}),
+handle_command({read, Key}, _From, S0=#state{connector=Connector}) ->
+    {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {Key}),
     {reply, {ok, Value}, S0};
 
-handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId}) ->
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-    ok = ?BACKEND_CONNECTOR:update({Key, Value, TimeStamp}),
+    ok = ?BACKEND_CONNECTOR:update(Connector, {Key, Value, TimeStamp}),
     Label = {Key, TimeStamp, {Partition, node()}},
     saturn_leaf_producer:new_label(MyId, Label, Partition),
     case groups_manager_serv:get_datanodes(Key) of
@@ -123,9 +126,9 @@ handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, part
     end,
     {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, last_label=Label}};
 
-handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS0}) ->
+handle_command({propagate, Key, Value, TimeStamp}, _From, S0=#state{max_ts=MaxTS0, connector=Connector}) ->
     MaxTS1 = max(TimeStamp, MaxTS0),
-    ?BACKEND_CONNECTOR:propagation({Key, Value, TimeStamp}),
+    ?BACKEND_CONNECTOR:propagation(Connector, {Key, Value, TimeStamp}),
     {reply, ok, S0#state{max_ts=MaxTS1}};
     
 handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
