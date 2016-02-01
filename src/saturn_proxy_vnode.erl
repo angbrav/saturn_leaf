@@ -164,9 +164,9 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Key = Payload#payload_remote.key_source,
     Client = Payload#payload_remote.client,
     Source = Label#label.sender,
-    Label = create_label(remote_reply, Key, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
-    saturn_leaf_producer:new_label(MyId, Label, Partition),
-    {reply, ok, S0#state{max_ts=TimeStamp, last_label=Label}};
+    NewLabel = create_label(remote_reply, Key, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
+    saturn_leaf_producer:new_label(MyId, NewLabel, Partition),
+    {reply, ok, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
 handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
