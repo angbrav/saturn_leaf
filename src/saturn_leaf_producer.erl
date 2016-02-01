@@ -51,7 +51,7 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0) ->
 
 handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
     Now = saturn_utilities:now_milisec(),
-    {_Key, TimeStamp, _Node} = Label,
+    TimeStamp = Label#label.timestamp,
     Labels1 = orddict:append(TimeStamp, {Now, Label}, Labels0),
     S1 = update_vclock(Partition, TimeStamp, S0#state{labels=Labels1}),
     S2 = deliver_labels(S1),
@@ -116,11 +116,12 @@ filter_labels([H|Rest], StableTime, MyId, Delay) ->
         true ->
             Now = saturn_utilities:now_milisec(),
             {FinalStream, Leftovers} = lists:foldl(fun({Time, Label}, {FinalStream0, Leftovers0}) ->
+                                                Key = Label#label.key,
                                                 case (Time + Delay) > Now of
                                                     true ->
                                                         {FinalStream0, Leftovers0 ++ [{Time, Label}]};
                                                     false ->
-                                                        {FinalStream0 ++ [Label], Leftovers0 }
+                                                        {FinalStream0 ++ [{Key, Label}], Leftovers0 }
                                                 end
                                               end, {[], []}, ListLabels),
             case groups_manager_serv:filter_stream_leaf(FinalStream) of
@@ -151,7 +152,8 @@ delayed_delivery(MyId, Delay, {Time, Label}) ->
         false ->
             noop
     end,
-    case groups_manager_serv:filter_stream_leaf([Label]) of
+    Key = Label#label.key,
+    case groups_manager_serv:filter_stream_leaf([{Key, Label}]) of
         {ok, [], _} ->
             noop;
         {ok, _, no_indexnode} ->
