@@ -1,4 +1,4 @@
--module(five_nodes_test).
+-module(remote_reads_test).
 
 -export([confirm/0]).
 
@@ -47,11 +47,12 @@ confirm() ->
     Tree4 = dict:store(4, [-1,-1,13,14,-1], Tree3),
 
     Groups0 = dict:store(1, [0, 1, 2], dict:new()),
-    Groups1 = dict:store(2, [0, 1, 2], Groups0),
-    Groups2 = dict:store(3, [0, 1, 2], Groups1),
+    Groups1 = dict:store(2, [0, 1], Groups0),
+    Groups2 = dict:store(3, [0], Groups1),
+    Groups3 = dict:store(4, [0, 1, 2], Groups2),
 
     ok = common_rt:set_tree_clusters(Clusters, Tree4, 3),
-    ok = common_rt:set_groups_clusters(Clusters, Groups2),
+    ok = common_rt:set_groups_clusters(Clusters, Groups3),
 
     %% Starting internal1
     {ok, HostPortInternal1}=rpc:call(Internal1, saturn_internal_sup, start_internal, [4043, 3]),
@@ -83,28 +84,73 @@ confirm() ->
     ok = common_rt:new_node_cluster(Cluster5, 2, HostPortLeaf3),
     ok = common_rt:new_node_cluster(Cluster5, 3, HostPortInternal1),
 
-    five_nodes_test(Leaf1, Leaf2, Leaf3),
+    single_partial_test(Leaf1, Leaf2, Leaf3),
+    multiple_partial_test(Leaf1, Leaf2, Leaf3),
 
     pass.
     
-five_nodes_test(Leaf1, Leaf2, Leaf3) ->
-    lager:info("Test started: five_nodes_test"),
+single_partial_test(Leaf1, Leaf2, _Leaf3) ->
+    lager:info("Test started: single_partial_test"),
 
-    Key=1,
+    KeySingle=3,
+    KeyAll=1,
     
     %% Reading a key thats empty
-    Result1=rpc:call(Leaf1, saturn_leaf, read, [Key, 0]),
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [KeySingle, 0]),
     ?assertMatch({ok, {empty, 0}}, Result1),
 
     %% Update key
-    Result2=rpc:call(Leaf1, saturn_leaf, update, [Key, 3, 0]),
+    Result2=rpc:call(Leaf1, saturn_leaf, update, [KeySingle, 3, 0]),
     ?assertMatch({ok, _Clock1}, Result2),
 
-    Result3=rpc:call(Leaf1, saturn_leaf, read, [Key, 0]),
+    Result3=rpc:call(Leaf1, saturn_leaf, read, [KeySingle, 0]),
     ?assertMatch({ok, {3, _Clock1}}, Result3),
 
-    Result4 = saturn_test_utilities:eventual_read(Key, Leaf2, 3),
-    ?assertMatch({ok, {3, _Clock1}}, Result4),
+    Result4=rpc:call(Leaf1, saturn_leaf, read, [KeyAll, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result4),
 
-    Result5 = saturn_test_utilities:eventual_read(Key, Leaf3, 3),
-    ?assertMatch({ok, {3, _Clock1}}, Result5).
+    %% Update key
+    Result5=rpc:call(Leaf1, saturn_leaf, update, [KeyAll, 1, 0]),
+    ?assertMatch({ok, _Clock2}, Result5),
+
+    Result6=rpc:call(Leaf1, saturn_leaf, read, [KeyAll, 0]),
+    ?assertMatch({ok, {1, _Clock2}}, Result6),
+
+    {ok, {_Value, Clock3}} = Result7 = saturn_test_utilities:eventual_read(KeyAll, Leaf2, 1),
+    ?assertMatch({ok, {1, Clock3}}, Result7),
+
+    Result8=rpc:call(Leaf2, saturn_leaf, read, [KeySingle, Clock3]),
+    ?assertMatch({ok, {3, _Clock4}}, Result8).
+
+multiple_partial_test(Leaf1, _Leaf2, Leaf3) ->
+    lager:info("Test started: single_partial_test"),
+
+    KeyPartial=2,
+    KeyAll=4,
+   
+    %% Reading a key thats empty
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [KeyPartial, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
+
+    %% Update key
+    Result2=rpc:call(Leaf1, saturn_leaf, update, [KeyPartial, 2, 0]),
+    ?assertMatch({ok, _Clock1}, Result2),
+
+    Result3=rpc:call(Leaf1, saturn_leaf, read, [KeyPartial, 0]),
+    ?assertMatch({ok, {2, _Clock1}}, Result3),
+
+    Result4=rpc:call(Leaf1, saturn_leaf, read, [KeyAll, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result4),
+
+    %% Update key
+    Result5=rpc:call(Leaf1, saturn_leaf, update, [KeyAll, 4, 0]),
+    ?assertMatch({ok, _Clock2}, Result5),
+
+    Result6=rpc:call(Leaf1, saturn_leaf, read, [KeyAll, 0]),
+    ?assertMatch({ok, {4, _Clock2}}, Result6),
+
+    {ok, {_Value, Clock3}} = Result7 = saturn_test_utilities:eventual_read(KeyAll, Leaf3, 4),
+    ?assertMatch({ok, {4, Clock3}}, Result7),
+
+    Result8=rpc:call(Leaf3, saturn_leaf, read, [KeyPartial, Clock3]),
+    ?assertMatch({ok, {2, _Clock4}}, Result8).

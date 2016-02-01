@@ -41,16 +41,15 @@ handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Label
     end,
     {reply, ok, S1};
 
-handle_call({new_operation, Label, Key, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
+handle_call({new_operation, Label, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
     lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
-            {Key, _Clock, _} = Label,
             ok = execute_operation(Label, Value),
             Labels1 = queue:drop(Labels0),
             S1 = flush_queue(queue:to_list(Labels1), S0);
         _ ->
-            Ops1 = dict:store(Label, {Key, Value}, Ops0),
+            Ops1 = dict:store(Label, Value, Ops0),
             S1 = S0#state{ops_dict=Ops1}
     end,
     {reply, ok, S1}.
@@ -67,7 +66,9 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-execute_operation({Key, Clock, _Node}, Value) ->
+execute_operation(Label, Value) ->
+    Key = Label#label.key,
+    Clock = Label#label.timestamp,
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
@@ -76,15 +77,51 @@ execute_operation({Key, Clock, _Node}, Value) ->
 flush_queue([], S0) ->
     S0#state{labels_queue=queue:new()};
 
-flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0}) ->
-    case dict:find(Label, Ops0) of
-        {ok, {Key, Value}} ->
-            {Key, _Clock, _} = Label,
-            ok = execute_operation(Label, Value),
-            Ops1 = dict:erase(Label, Ops0),
-            flush_queue(Rest, S0#state{ops_dict=Ops1});
-        _ ->
-            S0#state{labels_queue=queue:from_list(Labels)}
+flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
+    case Label#label.operation of
+        remote_read ->
+            Payload = Label#label.payload,
+            Destination = Payload#payload_remote.to,
+            case is_sent_to_me(Destination, MyId) of
+                true ->
+                    Key = Label#label.key,
+                    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
+                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
+                    [{IndexNode, _Type}] = PrefList,
+                    saturn_proxy_vnode:remote_read(IndexNode, Label);
+                false ->
+                    noop
+            end,
+            flush_queue(Rest, S0);
+        remote_reply ->
+            Payload = Label#label.payload,
+            Destination = Payload#payload_reply.to,
+            case is_sent_to_me(Destination, MyId) of
+                true ->
+                    Client = Payload#payload_reply.client,
+                    Value = Payload#payload_reply.value,
+                    riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                false ->
+                    noop
+            end,
+            flush_queue(Rest, S0);
+        update ->
+            case dict:find(Label, Ops0) of
+                {ok, Value} ->
+                    ok = execute_operation(Label, Value),
+                    Ops1 = dict:erase(Label, Ops0),
+                    flush_queue(Rest, S0#state{ops_dict=Ops1});
+                _ ->
+                    lager:info("Operation not received for label: ~p", [Label]),
+                    S0#state{labels_queue=queue:from_list(Labels)}
+            end
+    end.
+
+is_sent_to_me(Destination, MyId) ->
+    case Destination of
+        all -> true;
+        MyId -> true;
+        _ -> false
     end.
 
 -ifdef(TEST).
