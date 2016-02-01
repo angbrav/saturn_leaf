@@ -65,14 +65,14 @@ full_setup_test(Leaf1, Leaf2) ->
     Key=1,
 
     %% Reading a key thats empty
-    Result1=rpc:call(Leaf1, saturn_leaf, read, [Key]),
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [Key, 0]),
     ?assertMatch({ok, {empty, 0}}, Result1),
 
     %% Update key
     Result2=rpc:call(Leaf1, saturn_leaf, update, [Key, 3, 0]),
     ?assertMatch({ok, _Clock1}, Result2),
 
-    Result3=rpc:call(Leaf1, saturn_leaf, read, [Key]),
+    Result3=rpc:call(Leaf1, saturn_leaf, read, [Key, 0]),
     ?assertMatch({ok, {3, _Clock1}}, Result3),
 
     Result4 = saturn_test_utilities:eventual_read(Key, Leaf2, 3),
