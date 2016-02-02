@@ -158,9 +158,9 @@ handle_command({propagate, Key, Value, _TimeStamp}, _From, S0=#state{connector=C
     ok = ?BACKEND_CONNECTOR:update(Connector, {Key, Value, 0}),
     {reply, ok, S0};
     
-handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition}) ->
+handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     KeyToRead = Label#label.key,
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read({KeyToRead}),
+    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {KeyToRead}),
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(PhysicalClock, MaxTS0+1),
     Payload = Label#label.payload,

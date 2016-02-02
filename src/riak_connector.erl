@@ -53,6 +53,7 @@ propagation(Riak, Payload)->
 connect() ->
     Port = app_helper:get_env(saturn_leaf, riak_port),
     Node = app_helper:get_env(saturn_leaf, riak_node),
+    %lager:info("Connecting to riak at ~p:~p", [Node, Port]),
     {ok, Pid} = riakc_pb_socket:start_link(Node, Port),
     Pid.
 
