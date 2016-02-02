@@ -31,6 +31,7 @@
 
 -record(state, {partition,
                 max_ts,
+                connector,
                 last_label,
                 myid}).
 
@@ -74,9 +75,11 @@ remote_read(Node, Label) ->
 
 
 init([Partition]) ->
+    Connector = ?BACKEND_CONNECTOR:connect(),
     {ok, #state{partition=Partition,
                 max_ts=0,
-                last_label=none
+                last_label=none,
+                connector=Connector
                }}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
@@ -110,10 +113,10 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, Key, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition}) ->
+handle_command({read, Key, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
     case groups_manager_serv:do_replicate(Key) of
         true ->    
-            {ok, Value} = ?BACKEND_CONNECTOR:read({Key}),
+            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {Key}),
             {reply, {ok, Value}, S0};
         false ->
             %Remote read
@@ -128,12 +131,12 @@ handle_command({read, Key, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, par
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId}) ->
+handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
     case groups_manager_serv:do_replicate(Key) of
         true ->
-            ok = ?BACKEND_CONNECTOR:update({Key, Value, TimeStamp});
+            ok = ?BACKEND_CONNECTOR:update(Connector, {Key, Value, TimeStamp});
         false ->
             noop;
         {error, Reason1} ->
@@ -151,13 +154,13 @@ handle_command({update, Key, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, part
     end,
     {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, last_label=Label}};
 
-handle_command({propagate, Key, Value, _TimeStamp}, _From, S0) ->
-    ok = ?BACKEND_CONNECTOR:update({Key, Value, 0}),
+handle_command({propagate, Key, Value, _TimeStamp}, _From, S0=#state{connector=Connector}) ->
+    ok = ?BACKEND_CONNECTOR:update(Connector, {Key, Value, 0}),
     {reply, ok, S0};
     
-handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition}) ->
+handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     KeyToRead = Label#label.key,
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read({KeyToRead}),
+    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {KeyToRead}),
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(PhysicalClock, MaxTS0+1),
     Payload = Label#label.payload,

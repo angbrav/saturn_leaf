@@ -1,7 +1,12 @@
 -module(saturn_test_utilities).
 
--export([eventual_read/4,
-         eventual_read/3]).
+-export([eventual_read/3, 
+         eventual_read/4,
+         stop_datastore/1,
+         clean_datastore_data/1]).
+
+-include("saturn_leaf.hrl").
+-include("riak_backend_test.hrl").
 
 eventual_read(Key, Node, ExpectedResult) ->
     eventual_read(Key, Node, ExpectedResult, 0).
@@ -14,4 +19,47 @@ eventual_read(Key, Node, ExpectedResult, Clock) ->
             lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
             timer:sleep(500),
             eventual_read(Key, Node, ExpectedResult)
+    end.
+
+clean_datastore_data([]) ->
+    ok;
+
+clean_datastore_data([Id|Rest]) ->
+    case ?BACKEND of
+        simple_backend ->
+            ok; 
+        riak_backend ->
+            IdString = integer_to_list(Id),
+            DataDir = ?RIAK_PATH_BASE ++ IdString ++ "/data",
+            Executable = ?RIAK_PATH_BASE ++ IdString ++ "/bin/riak ",
+            lager:info("Stopping riak: ~p", [Executable ++ "stop"]),
+            os:cmd(Executable ++ "stop"),
+            lager:info("Removing data dir: ~p", ["rm -rf " ++ DataDir]),
+            os:cmd("rm -rf " ++ DataDir),
+            lager:info("Creating data dir: ~p", ["mkdir " ++ DataDir]),
+            os:cmd("mkdir " ++ DataDir),
+            lager:info("Starting riak: ~p", [Executable ++ "start"]),
+            os:cmd(Executable ++ "start"),
+            Node = "riak" ++ IdString ++ "@127.0.0.1",
+            rt:wait_for_service(list_to_atom(Node), riak_kv),
+            clean_datastore_data(Rest);
+        _ ->
+            ok
+    end.
+
+stop_datastore([]) ->
+    ok;
+
+stop_datastore([Id|Rest]) ->
+    case ?BACKEND of
+        simple_backend ->
+            ok;
+        riak_backend ->
+            IdString = integer_to_list(Id),
+            Executable = ?RIAK_PATH_BASE ++ IdString ++ "/bin/riak ",
+            lager:info("Stopping riak: ~p", [Executable ++ "stop"]),
+            os:cmd(Executable ++ "stop"),
+            stop_datastore(Rest);
+        _ ->
+            ok
     end.

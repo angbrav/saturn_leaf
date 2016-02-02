@@ -7,6 +7,8 @@
 -define(HARNESS, (rt_config:get(rt_harness))).
 
 confirm() ->
+    ok = saturn_test_utilities:clean_datastore_data([1,2]),
+
     NumVNodes = rt_config:get(num_vnodes, 8),
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
@@ -56,6 +58,8 @@ confirm() ->
     ok = common_rt:new_node_cluster(Cluster3, 1, HostPortLeaf2),
 
     full_setup_test(Leaf1, Leaf2),
+
+    ok = saturn_test_utilities:stop_datastore([1,2]),
 
     pass.
     

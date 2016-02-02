@@ -12,8 +12,13 @@
 -define(TREEFILE_TEST, "../include/tree_file_test.saturn").
 -define(GROUPSFILE_TEST, "../include/groups_file_test.saturn").
 
+%SIMPLE BACKEND
 -define(BACKEND, simple_backend).
 -define(BACKEND_CONNECTOR, simple_backend_connector).
+
+%RIAK
+%-define(BACKEND, riak_backend).
+%-define(BACKEND_CONNECTOR, riak_connector).
 
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
