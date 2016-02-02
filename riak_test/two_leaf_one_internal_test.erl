@@ -13,6 +13,8 @@ confirm() ->
     ]),
     Clusters = [Cluster1, Cluster2, Cluster3] = rt:build_clusters([1, 1, 1]),
 
+    saturn_test_utilities:clean_datastore_data(),
+
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
     rt:wait_until_ring_converged(Cluster2),

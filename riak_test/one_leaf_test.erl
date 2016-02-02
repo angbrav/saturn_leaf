@@ -18,6 +18,8 @@ confirm() ->
     N = 2,
     [Cluster1] = [[Node1, _Node2]] = rt:build_clusters([N]),
 
+    saturn_test_utilities:clean_datastore_data(),
+
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
 
