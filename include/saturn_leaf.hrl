@@ -19,3 +19,20 @@
 -define(MYIDKEY, myid_key).
 
 -define(HEARTBEAT_FREQ, 1000).
+
+-record(label, {operation :: remote_read | update | remote_reply,
+                key,
+                timestamp :: non_neg_integer(),
+                node,
+                sender :: non_neg_integer(),
+                payload}).
+
+-record(payload_reply, {to :: all | non_neg_integer(),
+                        client,
+                        value
+                       }).
+
+-record(payload_remote, {to :: all | non_neg_integer(),
+                         key_source,
+                         client
+                        }).
