@@ -1,6 +1,7 @@
 -module(riak_connector).
 
 -include("saturn_leaf.hrl").
+-include("riak_backend_test.hrl").
 
 -export([update/2,
          read/2,
@@ -50,7 +51,9 @@ propagation(Riak, Payload)->
     end.
 
 connect() ->
-    {ok, Pid} = riakc_pb_socket:start_link(?RIAK_NODE, ?RIAK_PORT),
+    Port = app_helper:get_env(saturn_leaf, riak_port),
+    Node = app_helper:get_env(saturn_leaf, riak_node),
+    {ok, Pid} = riakc_pb_socket:start_link(Node, Port),
     Pid.
 
 write_to_riak(Riak, Obj) ->
