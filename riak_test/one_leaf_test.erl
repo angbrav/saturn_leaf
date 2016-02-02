@@ -13,14 +13,17 @@
 -define(HARNESS, (rt_config:get(rt_harness))).
 
 confirm() ->
+    ok = saturn_test_utilities:clean_datastore_data([1]),
+
     NumVNodes = rt_config:get(num_vnodes, 8),
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
     ]),
+    rt:update_app_config(all,[
+        {saturn_leaf, [{riak_port, 8001}]}
+    ]),
     N = 2,
     [Cluster1] = [[Node1, _Node2]] = rt:build_clusters([N]),
-
-    saturn_test_utilities:clean_datastore_data(),
 
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
@@ -36,6 +39,8 @@ confirm() ->
     converger_no_interleaving(Cluster1),
     converger_interleaving(Cluster1),
 
+    ok = saturn_test_utilities:stop_datastore([1]),
+    
     pass.
     
 read_updates_different_nodes([Node1, Node2]) ->
