@@ -70,7 +70,7 @@ execute_operation(Label, Value) ->
     Key = Label#label.key,
     Clock = Label#label.timestamp,
     DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:propagate(IndexNode, Key, Value, Clock).
 
