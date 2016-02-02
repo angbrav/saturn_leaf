@@ -19,7 +19,3 @@
 -define(MYIDKEY, myid_key).
 
 -define(HEARTBEAT_FREQ, 1000).
-
--define(RIAK_PORT, 8087).
--define(RIAK_NODE, "127.0.0.1").
-
