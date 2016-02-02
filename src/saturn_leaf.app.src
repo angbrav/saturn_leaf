@@ -13,5 +13,6 @@
                   lager
                  ]},
   {mod, { saturn_leaf_app, []}},
-  {env, []}
+  {env, [{riak_node, '127.0.0.1'},
+         {riak_port, 7878}]}
  ]}.
