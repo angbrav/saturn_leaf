@@ -31,15 +31,19 @@
         ]).
 
 update(Riak, Payload)->
-    {Key, Value, TimeStamp} = Payload,
+    {BKey, Value, TimeStamp} = Payload,
+    {Bucket, Key} = BKey,
+    BucketB = term_to_binary(Bucket),
     KeyB = term_to_binary(Key),
-    Obj = riakc_obj:new(?BUCKET, KeyB, {Value, TimeStamp}),
+    Obj = riakc_obj:new(BucketB, KeyB, {Value, TimeStamp}),
     write_to_riak(Riak, Obj).
 
 read(Riak, Payload)->
-    {Key} = Payload,
+    {BKey} = Payload,
+    {Bucket, Key} = BKey,
+    BucketB = term_to_binary(Bucket),
     KeyB = term_to_binary(Key),
-    case riakc_pb_socket:get(Riak, ?BUCKET, KeyB) of
+    case riakc_pb_socket:get(Riak, BucketB, KeyB) of
         {error, notfound} ->
             {ok, {empty, 0}};
         {ok, Obj} ->
@@ -51,11 +55,13 @@ read(Riak, Payload)->
     end.
 
 propagation(Riak, Payload)->
-    {Key, Value, TimeStamp} = Payload,
+    {BKey, Value, TimeStamp} = Payload,
+    {Bucket, Key} = BKey,
+    BucketB = term_to_binary(Bucket),
     KeyB = term_to_binary(Key),
-    case riakc_pb_socket:get(Riak, ?BUCKET, KeyB) of
+    case riakc_pb_socket:get(Riak, BucketB, KeyB) of
         {error, notfound} ->
-            Obj = riakc_obj:new(?BUCKET, KeyB, {Value, TimeStamp}),
+            Obj = riakc_obj:new(BucketB, KeyB, {Value, TimeStamp}),
             write_to_riak(Riak, Obj);
         {ok, ObjR} ->
             {_OldValue, OldTimeStamp} = binary_to_term(riakc_obj:get_value(ObjR)),

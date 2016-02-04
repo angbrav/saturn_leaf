@@ -30,22 +30,22 @@
         ]).
 
 update(_Connector, Payload)->
-    {Key, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(Key),
-    saturn_simple_backend_vnode:update(IndexNode, Key, {Value, TimeStamp}).
+    {BKey, Value, TimeStamp} = Payload,
+    IndexNode = get_indexnode(BKey),
+    saturn_simple_backend_vnode:update(IndexNode, BKey, {Value, TimeStamp}).
 
 read(_Connector, Payload)->
-    {Key} = Payload,
-    IndexNode = get_indexnode(Key),
-    saturn_simple_backend_vnode:read(IndexNode, Key).
+    {BKey} = Payload,
+    IndexNode = get_indexnode(BKey),
+    saturn_simple_backend_vnode:read(IndexNode, BKey).
 
 propagation(_Connector, Payload)->
-    {Key, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(Key),
-    saturn_simple_backend_vnode:propagation(IndexNode, Key, {Value, TimeStamp}).
+    {BKey, Value, TimeStamp} = Payload,
+    IndexNode = get_indexnode(BKey),
+    saturn_simple_backend_vnode:propagation(IndexNode, BKey, {Value, TimeStamp}).
 
-get_indexnode(Key) ->
-    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
+get_indexnode(BKey) ->
+    DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     IndexNode.

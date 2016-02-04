@@ -88,12 +88,12 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 execute_operation(Label, Value) ->
-    Key = Label#label.key,
+    BKey = Label#label.bkey,
     Clock = Label#label.timestamp,
-    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
+    DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:propagate(IndexNode, Key, Value, Clock).
+    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
 
 flush_queue([], S0) ->
     S0#state{labels_queue=queue:new()};
@@ -105,8 +105,8 @@ flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
             Destination = Payload#payload_remote.to,
             case is_sent_to_me(Destination, MyId) of
                 true ->
-                    Key = Label#label.key,
-                    DocIdx = riak_core_util:chash_key({?BUCKET, Key}),
+                    BKey = Label#label.bkey,
+                    DocIdx = riak_core_util:chash_key(BKey),
                     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
                     [{IndexNode, _Type}] = PrefList,
                     saturn_proxy_vnode:remote_read(IndexNode, Label);
