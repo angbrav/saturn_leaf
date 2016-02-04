@@ -1,7 +1,5 @@
 -define(PRINT(Var), io:format("DEBUG: ~p:~p - ~p~n~n ~p~n~n", [?MODULE, ?LINE, ??Var, Var])).
 
--define(BUCKET, <<"saturn_leaf">>).
-
 -define(PROXY_MASTER, saturn_proxy_vnode_master).
 -define(PROXY_SERVICE, saturn_proxy).
 -define(SIMPLE_MASTER, saturn_simple_backend_vnode_master).
@@ -26,7 +24,7 @@
 -define(HEARTBEAT_FREQ, 1000).
 
 -record(label, {operation :: remote_read | update | remote_reply,
-                key,
+                bkey,
                 timestamp :: non_neg_integer(),
                 node,
                 sender :: non_neg_integer(),
@@ -38,6 +36,6 @@
                        }).
 
 -record(payload_remote, {to :: all | non_neg_integer(),
-                         key_source,
+                         bucket_source,
                          client
                         }).

@@ -77,27 +77,27 @@ confirm() ->
 communication_between_leafs(Node1, Node2) ->
     lager:info("Test started: communication_between_leafs"),
 
-    Key=1,
+    BKey={1, key1},
 
     %% Reading a key thats empty
-    Result1=rpc:call(Node1, saturn_leaf, read, [Key, 0]),
+    Result1=rpc:call(Node1, saturn_leaf, read, [BKey, 0]),
     ?assertMatch({ok, {empty, 0}}, Result1),
 
     %% Update key
-    Result2=rpc:call(Node1, saturn_leaf, update, [Key, 3, 0]),
+    Result2=rpc:call(Node1, saturn_leaf, update, [BKey, 3, 0]),
     ?assertMatch({ok, _Clock1}, Result2),
 
-    Result3=rpc:call(Node1, saturn_leaf, read, [Key, 0]),
+    Result3=rpc:call(Node1, saturn_leaf, read, [BKey, 0]),
     ?assertMatch({ok, {3, _Clock2}}, Result3),
 
-    {ok, Label1} = rpc:call(Node1, saturn_proxy_vnode, last_label, [Key]),
+    {ok, Label1} = rpc:call(Node1, saturn_proxy_vnode, last_label, [BKey]),
 
     %% Read from other client/node
-    Result4=rpc:call(Node2, saturn_leaf, read, [Key, 0]),
+    Result4=rpc:call(Node2, saturn_leaf, read, [BKey, 0]),
     ?assertMatch({ok, {empty, 0}}, Result4),
 
     Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [1, {new_stream, [Label1], 2}]),
     ?assertMatch(ok, Result5),
 
-    Result6 = saturn_test_utilities:eventual_read(Key, Node2, 3),
+    Result6 = saturn_test_utilities:eventual_read(BKey, Node2, 3),
     ?assertMatch({ok, {3, _Clock3}}, Result6).

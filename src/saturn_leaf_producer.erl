@@ -137,12 +137,12 @@ filter_labels([H|Rest], StableTime, MyId, Delay) ->
         true ->
             Now = saturn_utilities:now_milisec(),
             {FinalStream, Leftovers} = lists:foldl(fun({Time, Label}, {FinalStream0, Leftovers0}) ->
-                                                Key = Label#label.key,
+                                                BKey = Label#label.bkey,
                                                 case (Time + Delay) > Now of
                                                     true ->
                                                         {FinalStream0, Leftovers0 ++ [{Time, Label}]};
                                                     false ->
-                                                        {FinalStream0 ++ [{Key, Label}], Leftovers0 }
+                                                        {FinalStream0 ++ [{BKey, Label}], Leftovers0 }
                                                 end
                                               end, {[], []}, ListLabels),
             case groups_manager_serv:filter_stream_leaf(FinalStream) of
@@ -173,8 +173,8 @@ delayed_delivery(MyId, Delay, {Time, Label}) ->
         false ->
             noop
     end,
-    Key = Label#label.key,
-    case groups_manager_serv:filter_stream_leaf([{Key, Label}]) of
+    BKey = Label#label.bkey,
+    case groups_manager_serv:filter_stream_leaf([{BKey, Label}]) of
         {ok, [], _} ->
             noop;
         {ok, _, no_indexnode} ->
