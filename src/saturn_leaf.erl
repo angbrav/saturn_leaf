@@ -5,7 +5,8 @@
 -export([
          ping/0,
          update/3,
-         read/2
+         read/2,
+         spawn_wrapper/4
         ]).
 
 %% Public API
@@ -28,3 +29,7 @@ read({Bucket, Key}, Clock) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:read(IndexNode, {Bucket, Key}, Clock).
+
+spawn_wrapper(Module, Function, Pid, Args) ->
+    Result = apply(Module, Function, Args),
+    Pid ! Result.
