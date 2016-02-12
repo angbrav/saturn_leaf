@@ -19,38 +19,30 @@
 %% under the License.
 %%  
 %% -------------------------------------------------------------------
--module(simple_backend_connector).
+-module(simple_overlapping_ets_backend_connector).
 
 -include("saturn_leaf.hrl").
 
 -export([update/2,
          read/2,
-         propagation/2,
          connect/1
         ]).
 
-update(Connector, Payload)->
+update(ETS, Payload)->
     {BKey, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(BKey),
-    ok = saturn_simple_backend_vnode:update(IndexNode, BKey, {Value, TimeStamp}),
-    {ok, Connector}.
+    true =  ets:insert(ETS, {BKey, {Value, TimeStamp}}),
+    {ok, ETS}.
 
-read(_Connector, Payload)->
+read(ETS, Payload)->
     {BKey} = Payload,
-    IndexNode = get_indexnode(BKey),
-    saturn_simple_backend_vnode:read(IndexNode, BKey).
+    case ets:lookup(ETS, BKey) of
+        [] ->
+            {ok, {empty, 0}};
+        [{BKey, Value}] ->
+            {ok, Value}
+    end.
 
-propagation(Connector, Payload)->
-    {BKey, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(BKey),
-    ok = saturn_simple_backend_vnode:propagation(IndexNode, BKey, {Value, TimeStamp}),
-    {ok, Connector}.
-
-get_indexnode(BKey) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    IndexNode.
-
-connect(_) ->
-    ok.
+connect([Partition]) ->
+    Name = integer_to_list(Partition) ++ "kv",
+    ets:new(list_to_atom(Name), [set, named_table]).
+    

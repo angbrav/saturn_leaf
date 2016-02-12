@@ -27,7 +27,7 @@
 -export([update/2,
          read/2,
          propagation/2,
-         connect/0
+         connect/1
         ]).
 
 update(Riak, Payload)->
@@ -67,7 +67,7 @@ propagation(Riak, Payload)->
             {_OldValue, OldTimeStamp} = binary_to_term(riakc_obj:get_value(ObjR)),
             case OldTimeStamp >= TimeStamp of
                 true ->
-                    ok;
+                    {ok, Riak};
                 false ->
                     Obj2 = riakc_obj:update_value(ObjR, {Value, TimeStamp}),
                     write_to_riak(Riak, Obj2)
@@ -77,7 +77,7 @@ propagation(Riak, Payload)->
             {error, Else}
     end.
 
-connect() ->
+connect(_) ->
     Port = app_helper:get_env(saturn_leaf, riak_port),
     Node = app_helper:get_env(saturn_leaf, riak_node),
     %lager:info("Connecting to riak at ~p:~p", [Node, Port]),
@@ -87,7 +87,7 @@ connect() ->
 write_to_riak(Riak, Obj) ->
     case riakc_pb_socket:put(Riak, Obj) of
         ok ->
-            ok;
+            {ok, Riak};
         Else ->
             lager:error("Unexpected result when writing to Riak: ~p", [Else]),
             {error, Else}

@@ -49,6 +49,8 @@ clean_datastore_data([Id|Rest]) ->
     case ?BACKEND of
         simple_backend ->
             ok; 
+        simple_overlapping_backend ->
+            ok;
         riak_backend ->
             IdString = integer_to_list(Id),
             DataDir = ?RIAK_PATH_BASE ++ IdString ++ "/data",

@@ -19,38 +19,27 @@
 %% under the License.
 %%  
 %% -------------------------------------------------------------------
--module(simple_backend_connector).
+-module(simple_overlapping_dict_backend_connector).
 
 -include("saturn_leaf.hrl").
 
 -export([update/2,
          read/2,
-         propagation/2,
          connect/1
         ]).
 
-update(Connector, Payload)->
+update(KV0, Payload)->
     {BKey, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(BKey),
-    ok = saturn_simple_backend_vnode:update(IndexNode, BKey, {Value, TimeStamp}),
-    {ok, Connector}.
+    {ok, dict:store(BKey, {Value, TimeStamp}, KV0)}.
 
-read(_Connector, Payload)->
+read(KV, Payload)->
     {BKey} = Payload,
-    IndexNode = get_indexnode(BKey),
-    saturn_simple_backend_vnode:read(IndexNode, BKey).
-
-propagation(Connector, Payload)->
-    {BKey, Value, TimeStamp} = Payload,
-    IndexNode = get_indexnode(BKey),
-    ok = saturn_simple_backend_vnode:propagation(IndexNode, BKey, {Value, TimeStamp}),
-    {ok, Connector}.
-
-get_indexnode(BKey) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?SIMPLE_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    IndexNode.
+    case dict:find(BKey, KV) of
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            {ok, {empty, 0}}
+    end.
 
 connect(_) ->
-    ok.
+    dict:new().

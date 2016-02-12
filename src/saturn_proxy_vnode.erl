@@ -96,7 +96,8 @@ remote_read(Node, Label) ->
 
 
 init([Partition]) ->
-    Connector = ?BACKEND_CONNECTOR:connect(),
+    lager:info("Vnode init"),
+    Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
                 max_ts=0,
                 last_label=none,
@@ -152,16 +153,18 @@ handle_command({read, BKey, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, pa
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector}) ->
+handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
-    case groups_manager_serv:do_replicate(BKey) of
+    S1 = case groups_manager_serv:do_replicate(BKey) of
         true ->
-            ok = ?BACKEND_CONNECTOR:update(Connector, {BKey, Value, TimeStamp});
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+            S0#state{connector=Connector1};
         false ->
-            noop;
+            S0;
         {error, Reason1} ->
-            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1])
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
+            S0
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
     saturn_leaf_producer:new_label(MyId, Label, Partition),
@@ -173,11 +176,11 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, par
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
     end,
-    {reply, {ok, TimeStamp}, S0#state{max_ts=TimeStamp, last_label=Label}};
+    {reply, {ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector}) ->
-    ok = ?BACKEND_CONNECTOR:update(Connector, {BKey, Value, 0}),
-    {reply, ok, S0};
+handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
+    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
+    {reply, ok, S0#state{connector=Connector1}};
     
 handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     BKeyToRead = Label#label.bkey,
