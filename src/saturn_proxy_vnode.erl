@@ -168,10 +168,10 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, par
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
     saturn_leaf_producer:new_label(MyId, Label, Partition),
-    case groups_manager_serv:get_datanodes(BKey) of
+    case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
-            lists:foreach(fun({Host, Port}) ->
-                            saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_operation, Label, Value}])
+            lists:foreach(fun(Id) ->
+                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])

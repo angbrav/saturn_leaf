@@ -43,6 +43,8 @@ confirm() ->
     Node1 = hd(Cluster1),
     Node2 = hd(Cluster2),
 
+    pong = rpc:call(Node1, net_adm, ping, [Node2]),
+
     %% Starting servers in Node1
     {ok, HostPort0}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040, 0]),
     

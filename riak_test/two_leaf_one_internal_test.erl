@@ -45,6 +45,10 @@ confirm() ->
     Leaf2 = hd(Cluster2),
     Internal1 = hd(Cluster3),
 
+    pong = rpc:call(Leaf1, net_adm, ping, [Leaf2]),
+    pong = rpc:call(Leaf1, net_adm, ping, [Internal1]),
+    pong = rpc:call(Leaf2, net_adm, ping, [Internal1]),
+
     %% Starting leaf1
     {ok, HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
     %% Starting leaf2
