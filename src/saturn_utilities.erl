@@ -52,7 +52,7 @@ binary_search(List, N, Comparator, Carrying) ->
 
 now_microsec()->
     %% Not very efficient. os:timestamp() faster but non monotonic. Test!
-    {MegaSecs, Secs, MicroSecs} = erlang:now(),
+    {MegaSecs, Secs, MicroSecs} = os:timestamp(),
     (MegaSecs * 1000000 + Secs) * 1000000 + MicroSecs.
 
 now_milisec() ->

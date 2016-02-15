@@ -63,7 +63,7 @@ init([MyId]) ->
                         saturn_proxy_vnode:heartbeat(PrefList, MyId),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
-    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, delay=100}}.
+    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, delay=0}}.
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0) ->
     S1 = update_vclock(Partition, Clock, S0),

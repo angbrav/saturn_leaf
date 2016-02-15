@@ -43,7 +43,7 @@ start_link(MyId) ->
     gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
 handle(MyId, Message) ->
-    lager:info("Message received: ~p", [Message]),
+    %lager:info("Message received: ~p", [Message]),
     gen_server:call({global, reg_name(MyId)}, Message, infinity).
 
 init([MyId]) ->
@@ -52,7 +52,7 @@ init([MyId]) ->
                 myid=MyId}}.
 
 handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
-    lager:info("New stream received. Label: ~p", Stream),
+    %lager:info("New stream received. Label: ~p", Stream),
     case queue:len(Labels0) of
         0 ->
             S1 = flush_queue(Stream, S0);
@@ -63,7 +63,7 @@ handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Label
     {reply, ok, S1};
 
 handle_call({new_operation, Label, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
-    lager:info("New operation received. Label: ~p", [Label]),
+    %lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
             ok = execute_operation(Label, Value),
