@@ -27,6 +27,8 @@
 
 -define(HEARTBEAT_FREQ, 1000).
 
+-define(PROPAGATION_MODE, naive_erlang).
+
 -record(label, {operation :: remote_read | update | remote_reply,
                 bkey,
                 timestamp :: non_neg_integer(),

@@ -145,15 +145,7 @@ filter_labels([H|Rest], StableTime, MyId, Delay) ->
                                                         {FinalStream0 ++ [{BKey, Label}], Leftovers0 }
                                                 end
                                               end, {[], []}, ListLabels),
-            case groups_manager_serv:filter_stream_leaf(FinalStream) of
-                {ok, [], _} ->
-                    lager:info("Nothing to send"),
-                    noop;
-                {ok, _, no_indexnode} ->
-                    noop;
-                {ok, Stream, {Host, Port}} ->
-                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
-            end,
+            propagate_stream(FinalStream, MyId),
             case Leftovers of
                 [] ->
                     filter_labels(Rest, StableTime, MyId, Delay);
@@ -175,16 +167,32 @@ delayed_delivery(MyId, Delay, {Time, Label}) ->
             noop
     end,
     BKey = Label#label.bkey,
-    case groups_manager_serv:filter_stream_leaf([{BKey, Label}]) of
-        {ok, [], _} ->
-            lager:info("Nothing to send"),
-            noop;
-        {ok, _, no_indexnode} ->
-            noop;
-        {ok, Stream, {Host, Port}} ->
-            saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
-    end,
+    propagate_stream([{BKey, Label}], MyId),
     saturn_leaf_producer:label_delivered(MyId, {Time, Label}).
+
+propagate_stream(FinalStream, MyId) ->
+    case ?PROPAGATION_MODE of
+        naive_erlang ->
+            case groups_manager_serv:filter_stream_leaf_id(FinalStream) of
+                {ok, [], _} ->
+                    lager:info("Nothing to send"),
+                    noop;
+                {ok, _, no_indexnode} ->
+                    noop;
+                {ok, Stream, Id} ->
+                    saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
+            end;
+        short_tcp ->
+            case groups_manager_serv:filter_stream_leaf(FinalStream) of
+                {ok, [], _} ->
+                    lager:info("Nothing to send"),
+                    noop;
+                {ok, _, no_indexnode} ->
+                    noop;
+                {ok, Stream, {Host, Port}} ->
+                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
+            end
+    end.
 
 -ifdef(TEST).
 
