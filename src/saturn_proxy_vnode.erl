@@ -47,6 +47,8 @@
          propagate/4,
          heartbeat/2,
          remote_read/2,
+         remote_update/5,
+         check_deps/3,
          last_label/1,
          check_ready/1]).
 
@@ -54,6 +56,8 @@
                 max_ts,
                 connector,
                 last_label,
+                key_deps,
+                rest_deps,
                 myid}).
 
 %% API
@@ -79,15 +83,27 @@ update(Node, BKey, Value, Clock) ->
                                         {update, BKey, Value, Clock},
                                         ?PROXY_MASTER).
 
-propagate(Node, BKey, Value, TimeStamp) ->
+propagate(Node, BKey, Value, Metadata) ->
     riak_core_vnode_master:command(Node,
-                                   {propagate, BKey, Value, TimeStamp},
+                                   {propagate, BKey, Value, Metadata},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
 remote_read(Node, Label) ->
     riak_core_vnode_master:command(Node,
                                    {remote_read, Label},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+remote_update(Node, Label, Value, Deps, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {remote_update, Label, Value, Deps, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+check_deps(Node, Id, Deps) ->
+    riak_core_vnode_master:command(Node,
+                                   {check_deps, Id, Deps},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -101,8 +117,10 @@ init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
-                max_ts=0,
                 last_label=none,
+                key_deps=dict:new(),
+                max_ts=0,
+                rest_deps=dict:new(),
                 connector=Connector
                }}.
 
@@ -137,14 +155,47 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, BKey, _Clock}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
+handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=Deps0, rest_deps=Rest0}) ->
+    {R, Deps1} = lists:foldl(fun({BKey, Version}, {Total, Dict}=Acc) ->
+                                case groups_manager_serv:do_replicate(BKey) of
+                                    true ->
+                                        {ok, {_Value, {VerRead, _D}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+                                        case Version =< VerRead of
+                                            true ->
+                                                Acc;
+                                            false ->
+                                                case dict:find(BKey, Dict) of
+                                                    {ok, Orddict0} ->
+                                                        Orddict1 = orddict:append(Version, Id, Orddict0);
+                                                    error ->
+                                                        Orddict1 = orddict:append(Version, Id, orddict:new())
+                                                end,
+                                                {Total + 1, dict:store(BKey, Orddict1, Dict)}
+                                                end;
+                                    false ->
+                                        Acc
+                                end
+                              end, {0, Deps0}, Deps),
+    case R of
+        0 ->
+            DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
+            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+            [{IndexNode, _Type}] = PrefList,
+            saturn_cops_vnode:deps_checked(IndexNode, Id),
+            {noreply, S0};
+        _ ->
+            Rest1 = dict:store(Id, R, Rest0),
+            {noreply, S0#state{key_deps=Deps1, rest_deps=Rest1}}
+    end; 
+
+handle_command({read, BKey, Deps}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
     case groups_manager_serv:get_closest_dcid(BKey) of
         {ok, MyId} ->
             {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
             {reply, {ok, Value}, S0};
         {ok, Id} ->
             %Remote read
-            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From}),
+            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps}),
             saturn_leaf_converger:handle(Id, {remote_read, Label}),
             {noreply, S0};
         {error, Reason} ->
@@ -152,38 +203,49 @@ handle_command({read, BKey, _Clock}, From, S0=#state{connector=Connector, myid=M
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, _Clock}, _From, S0=#state{partition=Partition, myid=MyId, connector=Connector0}) ->
-    S1 = case groups_manager_serv:do_replicate(BKey) of
-        true ->
-            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-            S0#state{connector=Connector1};
-        false ->
-            S0;
+handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition, myid=MyId}) ->
+    case groups_manager_serv:get_closest_dcid(BKey) of
+        {ok, MyId} ->
+            {Version, S1} = do_put(BKey, Value, Deps, S0),
+            {reply, {ok, Version}, S1};
+        {ok, Id} ->
+            Label = create_label(remote_update, BKey, none, {Partition, node()}, MyId, #payload_remote_update{deps=Deps, client=From}),
+            saturn_leaf_converger:handle(Id, {remote_update, Label, Value}),
+            {noreply, S0};
         {error, Reason1} ->
-            lager:error("BKey ~p ~p is not in the dictionary",  [BKey, Reason1]),
-            S0
-    end,
-    Label = create_label(update, BKey, ts, {Partition, node()}, MyId, {}),
-    case groups_manager_serv:get_datanodes_ids(BKey) of
-        {ok, Group} ->
-            lists:foreach(fun(Id) ->
-                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
-                          end, Group);
-        {error, Reason2} ->
-            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-    end,
-    {reply, {ok, 0}, S1};
+            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason1]),
+            {reply, {error, Reason1}, S0}
+    end;
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-    {noreply, S0#state{connector=Connector1}};
+handle_command({remote_update, BKey, Value, Deps, Client}, _From, S0) ->
+    {Version, S1} = do_put(BKey, Value, Deps, S0),
+    riak_core_vnode:reply(Client, {ok, Version}),
+    {noreply, S1};
+
+handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps0}) ->
+    {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    case OldVersion =< TimeStamp of
+        true ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {TimeStamp, Deps}}),
+            S1 = case dict:find(BKey, KeyDeps0) of
+                    {ok, Orddict0} ->
+                        handle_pending_deps(Orddict0, BKey, TimeStamp, S0#state{connector=Connector1});
+                    error ->
+                        S0#state{connector=Connector1}
+                end,
+            {noreply, S1};
+        false ->
+            {noreply, S0}
+    end;
     
-handle_command({remote_read, Label}, _From, S0=#state{connector=Connector}) ->
+handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
     BKey = Label#label.bkey,
     Payload = Label#label.payload,
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+    Sender = Label#label.sender,
+    {ok, {Value,{Version, Deps}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
     Client = Payload#payload_remote.client,
-    riak_core_vnode:reply(Client, {ok, {Value, 0}}),
+    NewLabel = create_label(remote_reply, BKey, Version, {Partition, node()}, MyId, #payload_reply{value=Value, deps=Deps, client=Client}),
+    saturn_leaf_converger:handle(Sender, {remote_reply, NewLabel}),
     {noreply, S0};
 
 handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
@@ -251,3 +313,47 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            sender=Id,
            payload=Payload
            }.
+
+handle_pending_deps([], BKey, _Version, S0=#state{key_deps=KeyDeps0}) ->
+    S0#state{key_deps=dict:erase(BKey, KeyDeps0)};
+
+handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, S0=#state{rest_deps=Rest0, key_deps=KeyDeps0}) ->
+    case PVersion =< Version of
+        true ->
+            Rest1 = lists:foldl(fun(Id, Acc) ->
+                                    case dict:fetch(Id, Acc) of
+                                        1 ->
+                                            DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
+                                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+                                            [{IndexNode, _Type}] = PrefList,
+                                            saturn_cops_vnode:deps_checked(IndexNode, Id),
+                                            dict:erase(Id, Acc);
+                                        Left ->
+                                            dict:store(Id, Left-1, Acc)
+                                    end
+                                end, Rest0, Ids),
+            handle_pending_deps(Rest, BKey, Version, S0#state{rest_deps=Rest1});
+        false ->
+            S0#state{key_deps=dict:store(BKey, Orddict, KeyDeps0)}
+    end.
+
+do_put(BKey, Value, Deps, S0=#state{partition=Partition, myid=MyId, connector=Connector0, key_deps=KeyDeps0}) ->
+    {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    Version = OldVersion + 1,
+    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {Version, Deps}}),
+    S1 = case dict:find(BKey, KeyDeps0) of
+            {ok, Orddict0} ->
+                handle_pending_deps(Orddict0, BKey, Version, S0#state{connector=Connector1});
+            error ->
+                S0#state{connector=Connector1}
+         end,
+    Label = create_label(update, BKey, Version, {Partition, node()}, MyId, Deps),
+    case groups_manager_serv:get_datanodes_ids(BKey) of
+        {ok, Group} ->
+            lists:foreach(fun(Id) ->
+                saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
+                          end, Group);
+        {error, Reason2} ->
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+    end,
+    {Version, S1}.

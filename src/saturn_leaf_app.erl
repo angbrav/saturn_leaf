@@ -36,6 +36,9 @@ start(_StartType, _StartArgs) ->
         {ok, Pid} ->
             ok = riak_core:register([{vnode_module, saturn_proxy_vnode}]),
             ok = riak_core_node_watcher:service_up(?PROXY_SERVICE, self()),
+
+            ok = riak_core:register([{vnode_module, saturn_cops_vnode}]),
+            ok = riak_core_node_watcher:service_up(?COPS_SERVICE, self()),
         
             case ?BACKEND of
                 simple_backend ->

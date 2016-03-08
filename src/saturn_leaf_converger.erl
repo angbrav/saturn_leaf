@@ -33,8 +33,7 @@
          code_change/3, terminate/2]).
 -export([handle/2]).
 
--record(state, {labels_queue :: queue(),
-                ops_dict :: dict(),
+-record(state, {pending_id,
                 myid}).
                
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
@@ -47,23 +46,44 @@ handle(MyId, Message) ->
     gen_server:call({global, reg_name(MyId)}, Message, infinity).
 
 init([MyId]) ->
-    {ok, #state{labels_queue=queue:new(),
-                ops_dict=dict:new(),
+    {ok, #state{pending_id=0,
                 myid=MyId}}.
 
-handle_call({new_operation, Label, Value}, _From, S0) ->
+handle_call({new_operation, Label, Value}, _From, S0=#state{pending_id=PId0}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
-    ok = execute_operation(Label, Value),
-    {reply, ok, S0};
-
-handle_call({remote_read, Label}, _From, S0) ->
-    %lager:info("Remote read received. Label: ~p", [Label]),
-    BKey = Label#label.bkey,
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:remote_read(IndexNode, Label),
-    {reply, ok, S0}.
+    saturn_cops_vnode:update(IndexNode, PId0, Label, Value),
+    PId1 = PId0 + 1,
+    {reply, ok, S0#state{pending_id=PId1}};
+
+handle_call({remote_update, Label, Value}, _From, S0=#state{pending_id=PId0}) ->
+    %lager:info("New operation received. Label: ~p", [Label]),
+    DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_cops_vnode:remote_update(IndexNode, PId0, Label, Value),
+    PId1 = PId0 + 1,
+    {reply, ok, S0#state{pending_id=PId1}};
+
+handle_call({remote_read, Label}, _From, S0=#state{pending_id=PId0}) ->
+    %lager:info("New operation received. Label: ~p", [Label]),
+    DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_cops_vnode:remote_read(IndexNode, PId0, Label),
+    PId1 = PId0 + 1,
+    {reply, ok, S0#state{pending_id=PId1}};
+
+handle_call({remote_reply, Label}, _From, S0=#state{pending_id=PId0}) ->
+    %lager:info("New operation received. Label: ~p", [Label]),
+    DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_cops_vnode:remote_reply(IndexNode, PId0, Label),
+    PId1 = PId0 + 1,
+    {reply, ok, S0#state{pending_id=PId1}}.
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -76,14 +96,6 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-execute_operation(Label, Value) ->
-    BKey = Label#label.bkey,
-    Clock = Label#label.timestamp,
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
 
 -ifdef(TEST).
 

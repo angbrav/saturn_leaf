@@ -4,6 +4,10 @@
 -define(PROXY_SERVICE, saturn_proxy).
 -define(SIMPLE_MASTER, saturn_simple_backend_vnode_master).
 -define(SIMPLE_SERVICE, saturn_simple_backend).
+-define(COPS_MASTER, saturn_cops_vnode_master).
+-define(COPS_SERVICE, saturn_cops).
+
+-define(BUCKET_COPS, <<"cops">>).
 
 -define(GROUPSFILE, "data/manager/groups_file_simple.saturn").
 -define(TREEFILE, "data/manager/tree_file_simple.saturn").
@@ -17,6 +21,7 @@
 %SIMPLE OVERLAPPING_BACKEND
 -define(BACKEND, simple_overlapping_backend).
 -define(BACKEND_CONNECTOR, simple_overlapping_dict_backend_connector).
+-define(DEFAULT_METADATA, {0, []}).
 
 %RIAK
 %-define(BACKEND, riak_backend).
@@ -39,10 +44,16 @@
 
 -record(payload_reply, {to :: all | non_neg_integer(),
                         client,
+                        deps,
                         value
                        }).
 
 -record(payload_remote, {to :: all | non_neg_integer(),
                          bucket_source,
+                         deps,
                          client
                         }).
+
+-record(payload_remote_update, {deps,
+                                client
+                               }).

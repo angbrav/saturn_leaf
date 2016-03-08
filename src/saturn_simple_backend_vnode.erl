@@ -134,7 +134,7 @@ do_read(Key, _S0=#state{kv=KV}) ->
         {ok, Value} ->
             {ok, Value};
         error ->
-            {ok, {empty, 0}}
+            {ok, {empty, ?DEFAULT_METADATA}}
     end.
 
 do_write(Key, {Value, TimeStamp}, S0=#state{kv=KV0}) ->

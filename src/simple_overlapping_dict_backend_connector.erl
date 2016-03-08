@@ -38,7 +38,7 @@ read(KV, Payload)->
         {ok, Value} ->
             {ok, Value};
         error ->
-            {ok, {empty, 0}}
+            {ok, {empty, ?DEFAULT_METADATA}}
     end.
 
 connect(_) ->
