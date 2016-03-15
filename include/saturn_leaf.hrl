@@ -21,7 +21,10 @@
 %SIMPLE OVERLAPPING_BACKEND
 -define(BACKEND, simple_overlapping_backend).
 -define(BACKEND_CONNECTOR, simple_overlapping_dict_backend_connector).
--define(DEFAULT_METADATA, {0, []}).
+%cops
+%-define(DEFAULT_METADATA, {0, []}).
+%practi
+-define(DEFAULT_METADATA, 0).
 
 %RIAK
 %-define(BACKEND, riak_backend).
