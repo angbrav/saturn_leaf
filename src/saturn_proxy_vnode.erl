@@ -77,14 +77,14 @@ clock(Node, BKey, Value, Clock, Client) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-new_operation(Node, Clock, BKey, Node, Value) ->
-    riak_core_vnode_master:command(Node,
+new_operation(IndexNode, Clock, BKey, Node, Value) ->
+    riak_core_vnode_master:command(IndexNode,
                                    {new_operation, Clock, BKey, Node, Value},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-new_invalidation(Node, Clock, BKey, Node) ->
-    riak_core_vnode_master:sync_command(Node,
+new_invalidation(IndexNode, Clock, BKey, Node) ->
+    riak_core_vnode_master:sync_command(IndexNode,
                                         {new_invalidation, Clock, BKey, Node},
                                         ?PROXY_MASTER).
 
@@ -181,7 +181,7 @@ handle_command({clock, BKey, Value, Clock, Client}, _From, S0=#state{myid=MyId, 
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
-                            saturn_leaf_producer:new_operation(Id, {new_operation, Clock, BKey, MyId, Value})
+                            saturn_leaf_producer:new_operation(Id, Clock, BKey, MyId, Value)
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
@@ -190,6 +190,7 @@ handle_command({clock, BKey, Value, Clock, Client}, _From, S0=#state{myid=MyId, 
     {noreply, S1};
 
 handle_command({new_operation, Clock, BKey, Node, Value}, _From, S0=#state{vv=VV0, pops=PendingOps0}) ->
+    lager:info("Operation: ~p", [{Clock, BKey, Node}]),
     Stable = dict:fetch(Node, VV0),
     case Clock =< Stable of
         true ->
@@ -202,14 +203,22 @@ handle_command({new_operation, Clock, BKey, Node, Value}, _From, S0=#state{vv=VV
 
 handle_command({new_invalidation, Clock, BKey, Node}, _From, S0=#state{connector=Connector0, vv=VV0, pops=PendingOps0}) ->
     VV1 = dict:store(Node, Clock, VV0),
-    case dict:find({Clock, BKey, Node}, PendingOps0) of
-        {ok, Value} ->
-            S1 = execute_propagated_operation(BKey, Clock, Value, S0),
-            PendingOps1 = dict:erase({Clock, BKey, Node}, PendingOps0),
-            {reply, ok, S1#state{vv=VV1, pops=PendingOps1}};
-        error ->
-            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, invalid, Clock}),
-            {reply, ok, S0#state{vv=VV1, connector=Connector1}}
+    case groups_manager_serv:do_replicate(BKey) of
+        true ->
+            case dict:find({Clock, BKey, Node}, PendingOps0) of
+                {ok, Value} ->
+                    S1 = execute_propagated_operation(BKey, Clock, Value, S0),
+                    PendingOps1 = dict:erase({Clock, BKey, Node}, PendingOps0),
+                    {reply, ok, S1#state{vv=VV1, pops=PendingOps1}};
+                error ->
+                    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, invalid, Clock}),
+                    {reply, ok, S0#state{vv=VV1, connector=Connector1}}
+            end;
+        false ->
+            {reply, ok, S0#state{vv=VV1}};
+        {error, Reason1} ->
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
+            {reply, ok, S0#state{vv=VV1}}
     end;
 
 handle_command({remote_read, BKey, Sender, RemoteClient}, _From, S0=#state{connector=Connector, myid=MyId, preads=PendingReads0}) ->
@@ -282,8 +291,8 @@ check_myid(S0) ->
     end.
 
 execute_propagated_operation(BKey, Clock, Value, S0=#state{connector=Connector0, preads=PendingReads0, myid=MyId}) ->
-    {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-    PendingReads1 = flush_pending_reads(BKey, Value, PendingReads0, MyId, Ts),
+    {ok, {_ValueStored, Ts}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    PendingReads1 = flush_pending_reads(BKey, Value, PendingReads0, MyId, Clock),
     S1 = S0#state{preads=PendingReads1},
     case Ts =< Clock of
         true ->
@@ -300,7 +309,7 @@ flush_pending_reads(BKey, Value, PendingReads0, MyId, all) ->
                             lists:foreach(fun({Client, Type}) ->
                                             case Type of
                                                 local ->
-                                                    riak_core_vnode:reply(Client, Value);
+                                                    riak_core_vnode:reply(Client, {ok, Value});
                                                 Id ->
                                                      saturn_leaf_converger:remote_reply(MyId, bkey, Id, {Client, Value}) 
                                             end
@@ -334,7 +343,7 @@ filter_clients([{Ts, Clients}|Rest]=Orddict, Value, Clock, MyId) ->
             lists:foreach(fun({Client, Type}) ->
                             case Type of
                                 local ->
-                                    riak_core_vnode:reply(Client, Value);
+                                    riak_core_vnode:reply(Client, {ok, Value});
                                 Id ->
                                     saturn_leaf_converger:remote_reply(MyId, bkey, Id, {Client, Value}) 
                             end

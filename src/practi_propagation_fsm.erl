@@ -58,10 +58,11 @@ start_link(Server, Log, RReads) ->
 %% gen_fsm callbacks
 %% ===================================================================
 
-init([Server, Log]) ->
+init([Server, Log, RReads]) ->
     {ok, gather_info, #state{server=Server,
                              matrix=dict:new(),
-                             reason=init,
+                             reason=normal,
+                             rreads=RReads,
                              log=Log}, 0}.
 
 gather_info(timeout, S0) ->
@@ -77,36 +78,42 @@ gather_info(timeout, S0) ->
     {next_state, wait_for_reply, S0#state{group=Group, left=length(Group)},?CONNECT_TIMEOUT}.
 
 get_pending([], _Receiver, Vector0, _Min, Invalidations0, _EntriesLeft1, RV0) ->
-    Vector1 = lists:fold(fun(Entry, Acc) ->
+    Vector1 = lists:foldl(fun(Entry, Acc) ->
                             NewClock = dict:fetch(Entry, RV0),
                             dict:store(Entry, NewClock, Acc)
                          end, Vector0, dict:fetch_keys(RV0)),
-    {Invalidations0, Vector1};
+    {lists:reverse(Invalidations0), Vector1};
 
 get_pending([Next|Rest], Receiver, Vector0, Min, Invalidations0, EntriesLeft0, RV0) ->
-    {Clock, List} = Next,
+    {Clock, List0} = Next,
     case Clock =< Min of
         true ->
-            Vector1 = lists:fold(fun(Entry, Acc) ->
+            Vector1 = lists:foldl(fun(Entry, Acc) ->
                                     NewClock = dict:fetch(Entry, RV0),
                                     dict:store(Entry, NewClock, Acc)
                                  end, Vector0, dict:fetch_keys(RV0)),
-            {Invalidations0, Vector1};
+            {lists:reverse(Invalidations0), Vector1};
         false ->
-            {Invalidations1, N} = lists:fold(fun({Type, BKey, Node}, {Acc, Nodes}) ->
-                                                case Node of
-                                                    Receiver ->
-                                                        {Acc, Nodes};
-                                                    _ ->
-                                                        Entry = dict:fetch(Node, Vector0),
-                                                        case Clock > Entry of
-                                                        true ->
-                                                            {dict:append(Clock, {Type, BKey, Node, null}, Acc), Nodes ++ [Node]};
-                                                        false ->
-                                                            {Acc, Nodes}
-                                                        end
+            {List1, N} = lists:foldl(fun({Type, BKey, Node, Payload}, {Acc, Nodes}) ->
+                                        case Node of
+                                            Receiver ->
+                                                {Acc, Nodes};
+                                            _ ->
+                                                Entry = dict:fetch(Node, Vector0),
+                                                case Clock > Entry of
+                                                    true ->
+                                                        {Acc ++ [{Type, BKey, Node, Payload}], Nodes ++ [Node]};
+                                                    false ->
+                                                        {Acc, Nodes}
                                                 end
-                                             end, {Invalidations0, []}, List),
+                                        end
+                                     end, {[], []}, List0),
+            case List1 of
+                [] ->
+                    Invalidations1 = Invalidations0;
+                _ ->
+                    Invalidations1 = Invalidations0 ++ [{Clock, List1}]
+            end,
             case EntriesLeft0 of
                 [] ->
                     get_pending(Rest, Receiver, Vector0, Min, Invalidations1, [], RV0);
@@ -124,20 +131,27 @@ get_pending([Next|Rest], Receiver, Vector0, Min, Invalidations0, EntriesLeft0, R
     end.
 
 add_selective_events(Events, Pending0, Node) ->
-    list:foldl(fun({Type, Clock, BKey, Payload}, Acc) ->
+    lists:foldl(fun({Type, Clock, BKey, Payload}, Acc) ->
                 orddict:append(Clock, {Type, BKey, Node, Payload}, Acc)
                end, Pending0, Events).    
 
 wait_for_reply({what_i_know, Vector, Id}, S0=#state{matrix=Matrix0, log=Log0, rreads=RReads0, server=MyId})->
     Min = practi_vv:min_vclock(Vector),
-    {Pending0, NewVector} = get_pending(lists:reverse(Log0), Id, Vector, Min, dict:new(), disct:fetch_keys(Vector), dict:new()),
+    {Pending0, NewVector} = get_pending(lists:reverse(Log0), Id, Vector, Min, [], dict:fetch_keys(Vector), dict:new()),
     case dict:find(Id, RReads0) of
         {ok, List} ->
+            lager:info("Remote reads events ~p for node ~p", [List, Id]),
             Pending1 = add_selective_events(List, Pending0, MyId);
         error ->
+            lager:info("No remote reads events for node ~p", [Id]),
             Pending1 = Pending0
     end,
-    saturn_leaf_converger:pending_ops(Id, Pending1),
+    case Pending1 of
+        [] ->
+            gen_fsm:send_event(self(), {pending_received, Id});
+        _ -> 
+            saturn_leaf_converger:pending_invalidations(Id, self(), Pending1)
+    end,
     Matrix1 = dict:store(Id, NewVector, Matrix0),
     {next_state, wait_for_reply, S0#state{matrix=Matrix1}, ?CONNECT_TIMEOUT};
 

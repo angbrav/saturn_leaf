@@ -36,7 +36,7 @@
          remote_reply/4,
          what_you_know/2,
          pending_invalidations/3,
-         propagation_finished/3]).
+         propagation_finished/2]).
 
 -record(state, {lamport_clock,
                 precise_vv,
@@ -67,8 +67,8 @@ what_you_know(MyId, Fsm) ->
 pending_invalidations(MyId, Fsm, Pending) ->
     gen_server:cast({global, reg_name(MyId)}, {pending_invalidations, Fsm, Pending}).
 
-propagation_finished(MyId, Matrix, Log) ->
-    gen_server:cast({global, reg_name(MyId)}, {propagation_finished, Matrix, Log}).
+propagation_finished(MyId, Matrix) ->
+    gen_server:cast({global, reg_name(MyId)}, {propagation_finished, Matrix}).
 
 init([MyId]) ->
     {ok, Entries} = groups_manager_serv:get_all_nodes(), 
@@ -89,12 +89,12 @@ handle_cast({local_update, BKey, Value, Client}, S0=#state{lamport_clock=Clock0,
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:clock(IndexNode, BKey, Value, Clock1, Client),
-    Log1 = orddict:append(Clock1, {update, BKey, MyId}, Log0),
+    Log1 = orddict:append(Clock1, {update, BKey, MyId, null}, Log0),
     case Busy0 of
         true ->
             {noreply, S0#state{lamport_clock=Clock1, log=Log1, pending=true}};
         false ->
-            practi_propagate_fsm:start_link(MyId, Log1, RReads0),
+            practi_propagation_fsm_sup:start_fsm([MyId, Log1, RReads0]),
             {noreply, S0#state{lamport_clock=Clock1, busy=true, log=[], rreads=dict:new()}}
     end;
 
@@ -103,14 +103,15 @@ handle_cast({handle_reads, Type, BKey, RemoteId, Payload}, S0=#state{lamport_clo
     RReads1 = dict:append(RemoteId, {Type, Clock1, BKey, Payload}, RReads0),
     case Busy0 of
         true ->
-            {reply, ok, S0#state{lamport_clock=Clock1, rreads=RReads1, pending=true}};
+            {noreply, S0#state{lamport_clock=Clock1, rreads=RReads1, pending=true}};
         false ->
-            practi_propagate_fsm:start_link(MyId, Log0, RReads1),
-            {reply, ok, S0#state{lamport_clock=Clock1, busy=true, log=[], rreads=dict:new()}}
+            practi_propagation_fsm_sup:start_fsm([MyId, Log0, RReads1]),
+            {noreply, S0#state{lamport_clock=Clock1, busy=true, log=[], rreads=dict:new()}}
     end;
 
-handle_cast({what_you_know, Fsm}, _S0=#state{precise_vv=PreciseVV, myid=MyId}) ->
-    gen_fsm:send_event(Fsm, {what_i_know, PreciseVV, MyId});
+handle_cast({what_you_know, Fsm}, S0=#state{precise_vv=PreciseVV, myid=MyId}) ->
+    gen_fsm:send_event(Fsm, {what_i_know, PreciseVV, MyId}),
+    {noreply, S0};
 
 handle_cast({pending_invalidations, Fsm, Invalidations0}, S0=#state{precise_vv=PreciseVV0, log=Log0, myid=MyId, lamport_clock=Clock0}) ->
     gen_fsm:send_event(Fsm, {pending_received, MyId}),
@@ -124,17 +125,18 @@ handle_cast({pending_invalidations, Fsm, Invalidations0}, S0=#state{precise_vv=P
             {ok, found, Index} ->
                 lists:sublist(Invalidations0, Index+1, length(Invalidations0)-Index)
           end,
+    lager:info("Pending invalidations ~p", [Invalidations1]),
     {Invalidations2, PreciseVV1} = process_pending(Invalidations1, [], PreciseVV0, Max),
     NewMax = practi_vv:max_vclock(PreciseVV1),
     Clock1 = max(NewMax, Clock0),
     %% Maybe only stored the ones others have not seen?
-    Log1 = saturn_utilities:merge_sorted_lists(Log0, Invalidations2),
+    Log1 = saturn_utilities:merge_sorted_lists(Log0, Invalidations2, []),
     {noreply, S0#state{log=Log1, precise_vv=PreciseVV1, lamport_clock=Clock1}};
 
 handle_cast({propagation_finished, Matrix}, S0=#state{log=Log0, myid=MyId, pending=Pending, rreads=RReads0}) ->
     case Pending of
         true ->
-            practi_propagate_fsm:start_link(MyId, Log0, RReads0),
+            practi_propagation_fsm_sup:start_fsm([MyId, Log0, RReads0]),
             {noreply, S0#state{log=[], pending=false, rreads=dict:new(), matrix=Matrix}};
         false ->
             {noreply, S0#state{busy=false, matrix=Matrix}}
@@ -203,7 +205,7 @@ handle_invalidation({Type, BKey, Node, Payload}, Clock) ->
     [{IndexNode, _Type}] = PrefList,
     case Type of
         update ->
-            ok = saturn_proxy_vnode:new_invalidation(IndexNode, BKey, Clock, Node),
+            ok = saturn_proxy_vnode:new_invalidation(IndexNode, Clock, BKey, Node),
             {ok, add};
         remote_read ->
             ok = saturn_proxy_vnode:remote_read(IndexNode, BKey, Node, Payload),
