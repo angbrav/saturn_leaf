@@ -44,34 +44,22 @@
 
 -export([read/3,
          update/4,
-         propagate/4,
-         heartbeat/2,
-         remote_read/2,
-         remote_update/5,
-         check_deps/3,
-         last_label/1,
+         new_operation/5,
+         clock/5,
+         new_invalidation/4,
+         remote_read/4,
          check_ready/1]).
 
 -record(state, {partition,
-                max_ts,
                 connector,
-                last_label,
-                key_deps,
-                rest_deps,
+                preads,
+                pops,
+                vv,
                 myid}).
 
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
-
-%Testing purposes
-last_label(BKey) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    riak_core_vnode_master:sync_command(IndexNode,
-                                        last_label,
-                                        ?PROXY_MASTER).
 
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
@@ -83,33 +71,26 @@ update(Node, BKey, Value, Clock) ->
                                         {update, BKey, Value, Clock},
                                         ?PROXY_MASTER).
 
-propagate(Node, BKey, Value, Metadata) ->
+clock(Node, BKey, Value, Clock, Client) ->
     riak_core_vnode_master:command(Node,
-                                   {propagate, BKey, Value, Metadata},
+                                   {clock, BKey, Value, Clock, Client},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-remote_read(Node, Label) ->
+new_operation(Node, Clock, BKey, Node, Value) ->
     riak_core_vnode_master:command(Node,
-                                   {remote_read, Label},
+                                   {new_operation, Clock, BKey, Node, Value},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-remote_update(Node, Label, Value, Deps, Client) ->
-    riak_core_vnode_master:command(Node,
-                                   {remote_update, Label, Value, Deps, Client},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
+new_invalidation(Node, Clock, BKey, Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {new_invalidation, Clock, BKey, Node},
+                                        ?PROXY_MASTER).
 
-check_deps(Node, Id, Deps) ->
+remote_read(Node, BKey, Sender, RemoteClient) ->
     riak_core_vnode_master:command(Node,
-                                   {check_deps, Id, Deps},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
-
-heartbeat(Node, MyId) ->
-    riak_core_vnode_master:command(Node,
-                                   {heartbeat, MyId},
+                                   {remote_read, BKey, Sender, RemoteClient},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -117,10 +98,8 @@ init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
-                last_label=none,
-                key_deps=dict:new(),
-                max_ts=0,
-                rest_deps=dict:new(),
+                preads=dict:new(),
+                pops=dict:new(),
                 connector=Connector
                }}.
 
@@ -155,107 +134,100 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=Deps0, rest_deps=Rest0}) ->
-    {R, Deps1} = lists:foldl(fun({BKey, Version}, {Total, Dict}=Acc) ->
-                                case groups_manager_serv:do_replicate(BKey) of
-                                    true ->
-                                        {ok, {_Value, {VerRead, _D}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-                                        case Version =< VerRead of
-                                            true ->
-                                                Acc;
-                                            false ->
-                                                case dict:find(BKey, Dict) of
-                                                    {ok, Orddict0} ->
-                                                        Orddict1 = orddict:append(Version, Id, Orddict0);
-                                                    error ->
-                                                        Orddict1 = orddict:append(Version, Id, orddict:new())
-                                                end,
-                                                {Total + 1, dict:store(BKey, Orddict1, Dict)}
-                                                end;
-                                    false ->
-                                        Acc
-                                end
-                              end, {0, Deps0}, Deps),
-    case R of
-        0 ->
-            DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
-            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
-            [{IndexNode, _Type}] = PrefList,
-            saturn_cops_vnode:deps_checked(IndexNode, Id),
-            {noreply, S0};
-        _ ->
-            Rest1 = dict:store(Id, R, Rest0),
-            {noreply, S0#state{key_deps=Deps1, rest_deps=Rest1}}
-    end; 
-
-handle_command({read, BKey, Deps}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
+handle_command({read, BKey, _Deps}, From, S0=#state{connector=Connector, myid=MyId, preads=PendingReads0}) ->
     case groups_manager_serv:get_closest_dcid(BKey) of
         {ok, MyId} ->
-            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-            {reply, {ok, Value}, S0};
+            case ?BACKEND_CONNECTOR:read(Connector, {BKey}) of
+                {ok, {invalid, Ts}} ->
+                    case dict:find(BKey, PendingReads0) of
+                        {ok, Orddict0} ->
+                            Orddict1 = orddict:append(Ts, {From, local}, Orddict0);
+                        error ->   
+                            Orddict1 = orddict:append(Ts, {From, local}, orddict:new())
+                    end,
+                    PendingReads1 = dict:store(BKey, Orddict1, PendingReads0),
+                    {noreply, S0#state{preads=PendingReads1}};
+                {ok, {Value, _Ts}} ->
+                    {reply, {ok, Value}, S0};
+                _ ->
+                    lager:error("Wrong format when reading"),
+                    {reply, {error, wrong_format}, S0}
+            end;
         {ok, Id} ->
             %Remote read
-            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps}),
-            saturn_leaf_converger:handle(Id, {remote_read, Label}),
+            saturn_leaf_converger:remote_read(MyId, BKey, Id, From),
             {noreply, S0};
         {error, Reason} ->
             lager:error("BKey ~p ~p is not replicated",  [BKey, Reason]),
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition, myid=MyId}) ->
-    case groups_manager_serv:get_closest_dcid(BKey) of
-        {ok, MyId} ->
-            {Version, S1} = do_put(BKey, Value, Deps, S0),
-            {reply, {ok, Version}, S1};
-        {ok, Id} ->
-            Label = create_label(remote_update, BKey, none, {Partition, node()}, MyId, #payload_remote_update{deps=Deps, client=From}),
-            saturn_leaf_converger:handle(Id, {remote_update, Label, Value}),
-            {noreply, S0};
-        {error, Reason1} ->
-            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason1]),
-            {reply, {error, Reason1}, S0}
-    end;
-
-handle_command({remote_update, BKey, Value, Deps, Client}, _From, S0) ->
-    {Version, S1} = do_put(BKey, Value, Deps, S0),
-    riak_core_vnode:reply(Client, {ok, Version}),
-    {noreply, S1};
-
-handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps0}) ->
-    {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-    case OldVersion =< TimeStamp of
-        true ->
-            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {TimeStamp, Deps}}),
-            S1 = case dict:find(BKey, KeyDeps0) of
-                    {ok, Orddict0} ->
-                        handle_pending_deps(Orddict0, BKey, TimeStamp, S0#state{connector=Connector1});
-                    error ->
-                        S0#state{connector=Connector1}
-                end,
-            {noreply, S1};
-        false ->
-            {noreply, S0}
-    end;
-    
-handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
-    BKey = Label#label.bkey,
-    Payload = Label#label.payload,
-    Sender = Label#label.sender,
-    {ok, {Value,{Version, Deps}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-    Client = Payload#payload_remote.client,
-    NewLabel = create_label(remote_reply, BKey, Version, {Partition, node()}, MyId, #payload_reply{value=Value, deps=Deps, client=Client}),
-    saturn_leaf_converger:handle(Sender, {remote_reply, NewLabel}),
+handle_command({update, BKey, Value, _Deps}, From, S0=#state{myid=MyId}) ->
+    saturn_leaf_converger:local_update(MyId, BKey, Value, From),
     {noreply, S0};
 
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
-    Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
-    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
-    %riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, max_ts=Clock}};
+handle_command({clock, BKey, Value, Clock, Client}, _From, S0=#state{myid=MyId, preads=PendingReads0, connector=Connector0}) ->
+    S1=case groups_manager_serv:do_replicate(BKey) of
+        true ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, Clock}),
+            PendingReads1 = flush_pending_reads(BKey, Value, PendingReads0, MyId, all),
+            S0#state{connector=Connector1, preads=PendingReads1};
+        false ->
+            S0;
+        {error, Reason1} ->
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
+            S0
+    end,
+    case groups_manager_serv:get_datanodes_ids(BKey) of
+        {ok, Group} ->
+            lists:foreach(fun(Id) ->
+                            saturn_leaf_producer:new_operation(Id, {new_operation, Clock, BKey, MyId, Value})
+                          end, Group);
+        {error, Reason2} ->
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+    end,
+    riak_core_vnode:reply(Client, ok),
+    {noreply, S1};
 
-handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
-    {reply, {ok, LastLabel}, S0};
+handle_command({new_operation, Clock, BKey, Node, Value}, _From, S0=#state{vv=VV0, pops=PendingOps0}) ->
+    Stable = dict:fetch(Node, VV0),
+    case Clock =< Stable of
+        true ->
+            S1 = execute_propagated_operation(BKey, Clock, Value, S0),
+            {noreply, S1};
+        false ->
+            PendingOps1 = dict:store({Clock, BKey, Node}, Value, PendingOps0),
+            {noreply, S0#state{pops=PendingOps1}}
+    end;
+
+handle_command({new_invalidation, Clock, BKey, Node}, _From, S0=#state{connector=Connector0, vv=VV0, pops=PendingOps0}) ->
+    VV1 = dict:store(Node, Clock, VV0),
+    case dict:find({Clock, BKey, Node}, PendingOps0) of
+        {ok, Value} ->
+            S1 = execute_propagated_operation(BKey, Clock, Value, S0),
+            PendingOps1 = dict:erase({Clock, BKey, Node}, PendingOps0),
+            {reply, ok, S1#state{vv=VV1, pops=PendingOps1}};
+        error ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, invalid, Clock}),
+            {reply, ok, S0#state{vv=VV1, connector=Connector1}}
+    end;
+
+handle_command({remote_read, BKey, Sender, RemoteClient}, _From, S0=#state{connector=Connector, myid=MyId, preads=PendingReads0}) ->
+    {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+    case Value of
+        invalid ->
+            case dict:find(BKey, PendingReads0) of
+                {ok, Orddict0} ->
+                    Orddict1 = orddict:append(Ts, {RemoteClient, Sender}, Orddict0);
+                error ->
+                    Orddict1 = orddict:append(Ts, {RemoteClient, Sender}, orddict:new())
+            end,
+            PendingReads1 = dict:store(BKey, Orddict1, PendingReads0),
+            {noreply, S0#state{preads=PendingReads1}};
+        _ ->
+            saturn_leaf_converger:remote_reply(MyId, BKey, Sender, {RemoteClient, Value}),
+            {noreply, S0}
+    end;
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -302,58 +274,72 @@ check_myid(S0) ->
             check_myid(S0);
         MyId ->
             groups_manager_serv:set_myid(MyId),
-            S0#state{myid=MyId}
+            {ok, Entries} = groups_manager_serv:get_all_nodes_but_myself(),
+            PreciseVV = lists:foldl(fun(Entry, VV) ->
+                                        dict:store(Entry, 0, VV)
+                                    end, dict:new(), Entries),
+            S0#state{myid=MyId, vv=PreciseVV}
     end.
-    
-create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
-    #label{operation=Operation,
-           bkey=BKey,
-           timestamp=TimeStamp,
-           node=Node,
-           sender=Id,
-           payload=Payload
-           }.
 
-handle_pending_deps([], BKey, _Version, S0=#state{key_deps=KeyDeps0}) ->
-    S0#state{key_deps=dict:erase(BKey, KeyDeps0)};
-
-handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, S0=#state{rest_deps=Rest0, key_deps=KeyDeps0}) ->
-    case PVersion =< Version of
+execute_propagated_operation(BKey, Clock, Value, S0=#state{connector=Connector0, preads=PendingReads0, myid=MyId}) ->
+    {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    PendingReads1 = flush_pending_reads(BKey, Value, PendingReads0, MyId, Ts),
+    S1 = S0#state{preads=PendingReads1},
+    case Ts =< Clock of
         true ->
-            Rest1 = lists:foldl(fun(Id, Acc) ->
-                                    case dict:fetch(Id, Acc) of
-                                        1 ->
-                                            DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
-                                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
-                                            [{IndexNode, _Type}] = PrefList,
-                                            saturn_cops_vnode:deps_checked(IndexNode, Id),
-                                            dict:erase(Id, Acc);
-                                        Left ->
-                                            dict:store(Id, Left-1, Acc)
-                                    end
-                                end, Rest0, Ids),
-            handle_pending_deps(Rest, BKey, Version, S0#state{rest_deps=Rest1});
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, Clock}),
+            S1#state{connector=Connector1};
         false ->
-            S0#state{key_deps=dict:store(BKey, Orddict, KeyDeps0)}
+            S1
     end.
 
-do_put(BKey, Value, Deps, S0=#state{partition=Partition, myid=MyId, connector=Connector0, key_deps=KeyDeps0}) ->
-    {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-    Version = OldVersion + 1,
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {Version, Deps}}),
-    S1 = case dict:find(BKey, KeyDeps0) of
-            {ok, Orddict0} ->
-                handle_pending_deps(Orddict0, BKey, Version, S0#state{connector=Connector1});
-            error ->
-                S0#state{connector=Connector1}
-         end,
-    Label = create_label(update, BKey, Version, {Partition, node()}, MyId, Deps),
-    case groups_manager_serv:get_datanodes_ids(BKey) of
-        {ok, Group} ->
-            lists:foreach(fun(Id) ->
-                saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
-                          end, Group);
-        {error, Reason2} ->
-            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-    end,
-    {Version, S1}.
+flush_pending_reads(BKey, Value, PendingReads0, MyId, all) ->
+    case dict:find(BKey, PendingReads0) of
+        {ok, Orddict0} ->
+            lists:foreach(fun({_Clock, Clients}) ->
+                            lists:foreach(fun({Client, Type}) ->
+                                            case Type of
+                                                local ->
+                                                    riak_core_vnode:reply(Client, Value);
+                                                Id ->
+                                                     saturn_leaf_converger:remote_reply(MyId, bkey, Id, {Client, Value}) 
+                                            end
+                                          end, Clients)
+                          end, Orddict0),
+            dict:erase(BKey, PendingReads0);
+        error ->
+            PendingReads0
+    end;
+
+flush_pending_reads(BKey, Value, PendingReads0, MyId, Clock) ->
+    case dict:find(BKey, PendingReads0) of
+        {ok, Orddict0} ->
+            Orddict1 = filter_clients(Orddict0, Value, Clock, MyId),
+            case Orddict1 of
+                [] ->
+                    dict:erase(BKey, PendingReads0);
+                _ ->
+                    dict:store(BKey, PendingReads0)
+            end;
+        error ->
+            PendingReads0
+    end.
+
+filter_clients([], _Value, _Clock, _MyId) ->
+    [];
+
+filter_clients([{Ts, Clients}|Rest]=Orddict, Value, Clock, MyId) ->
+    case Ts=<Clock of
+        true ->
+            lists:foreach(fun({Client, Type}) ->
+                            case Type of
+                                local ->
+                                    riak_core_vnode:reply(Client, Value);
+                                Id ->
+                                    saturn_leaf_converger:remote_reply(MyId, bkey, Id, {Client, Value}) 
+                            end
+                          end, Clients),
+            filter_clients(Rest, Value, Clock, MyId);
+        false ->
+            Orddict
+    end.
