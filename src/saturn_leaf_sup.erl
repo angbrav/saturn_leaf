@@ -62,9 +62,9 @@ start_leaf(Port, MyId) ->
         _ ->
             noop
     end,
-    supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, [MyId]},
-                    permanent, 5000, worker, [saturn_leaf_producer]}),
+    %supervisor:start_child(?MODULE, {saturn_leaf_producer,
+    %                {saturn_leaf_producer, start_link, [MyId]},
+    %                permanent, 5000, worker, [saturn_leaf_producer]}),
 
     {ok, {Host, Port}}.
 

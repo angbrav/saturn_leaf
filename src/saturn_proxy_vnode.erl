@@ -126,7 +126,7 @@ compute_times(Node) ->
                                    ?PROXY_MASTER).
 
 init([Partition]) ->
-    lager:info("Vnode init"),
+    lager:info("Vnode init: ~p", [Partition]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
                 vv=dict:new(),
@@ -167,13 +167,13 @@ handle_command({check_tables_ready}, _Sender, SD0) ->
 
 handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv_lst=VV_LST0, vv_remote=VVRemote0}) ->
     FilteredEntries = lists:delete(MyId, Entries),
-    VV1 = dcit:foldl(fun(Entry, Acc) ->
+    VV1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, VV0, Entries),
-    VVRemote1 = dcit:foldl(fun(Entry, Acc) ->
+    VVRemote1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, VVRemote0, FilteredEntries),
-    VV_LST1 = dcit:foldl(fun(Partition, Acc) ->
+    VV_LST1 = lists:foldl(fun(Partition, Acc) ->
                             dict:store(Partition, 0, Acc)
                          end, VV_LST0, Partitions),
     groups_manager_serv:set_myid(MyId),
@@ -223,9 +223,9 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{last_physical=Last
     end,
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
-            VVRemote1 = lists:foldl(fun(Id) ->
+            VVRemote1 = lists:foldl(fun(Id, Acc) ->
                                         saturn_leaf_converger:propagate(Id, BKey, Value, TimeStamp, MyId),
-                                        dict:store(Id, TimeStamp)
+                                        dict:store(Id, TimeStamp, Acc)
                                     end, VVRemote0, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2]),
@@ -234,10 +234,12 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{last_physical=Last
     {reply, {ok, TimeStamp}, S1#state{last_physical=PhysicalClock1, vv=VV1, vv_remote=VVRemote1}};
 
 handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, pops=PendingOps0}) ->
+    %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, TimeStamp, Sender]),
     VV1 = dict:store(Sender, TimeStamp, VV0),
+    %lager:info("GST: ~p, Timestamp: ~p", [GST, TimeStamp]),
     case GST >= TimeStamp of
         true ->
-            Connector1 = handle_operation(update, {BKey, Value, TimeStamp}, Connector0),
+            Connector1 = handle_operation(update, {BKey, Value, TimeStamp}, Connector0, GST),
             {noreply, S0#state{vv=VV1, connector=Connector1}};
         false ->
             PendingOps1 = orddict:append(TimeStamp, {update, {BKey, Value, TimeStamp}}, PendingOps0),
@@ -245,9 +247,11 @@ handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{con
     end;
 
 handle_command({remote_read, BKey, Sender, Clock, Client}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST}) ->
+    lager:info("Received a remote read. Key ~p, Sender ~p, TS ~p, Client ~p",[BKey, Sender, Clock, Client]),
+    lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
-            Connector1 = handle_operation(remote_read, {BKey, Sender, Client}, Connector0),
+            Connector1 = handle_operation(remote_read, {BKey, Sender, Client}, Connector0, GST),
             {noreply, S0#state{connector=Connector1}};
         false ->
             PendingOps1 = orddict:append(Clock, {remote_read, {BKey, Sender, Client}}, PendingOps0),
@@ -255,9 +259,11 @@ handle_command({remote_read, BKey, Sender, Clock, Client}, _From, S0=#state{pops
     end;
 
 handle_command({remote_reply, Value, Client, Clock}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST}) ->
+    lager:info("Received a remote reply. Value ~p, Client ~p, Clock ~p",[Value, Client, Clock]),
+    lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
-            Connector1 = handle_operation(remote_reply, {Value, Client, Clock}, Connector0),
+            Connector1 = handle_operation(remote_reply, {Value, Client, Clock}, Connector0, GST),
             {noreply, S0#state{connector=Connector1}};
         false ->
             PendingOps1 = orddict:append(Clock, {remote_reply, {Value, Client, Clock}}, PendingOps0),
@@ -276,12 +282,13 @@ handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_
                                     false ->
                                         Acc
                                 end
-                            end, VVRemote0, dict:fecth_keys(VVRemote0)),
+                            end, VVRemote0, dict:fetch_keys(VVRemote0)),
     VV1 = dict:store(MyId, Max, VV0),
     riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, send_heartbeat),
     {noreply, S0#state{vv_remote=VVRemote1, vv=VV1}};
 
 handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
+    %lager:info("Hearbeadt received: ~p from ~p", [Clock, Id]),
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
@@ -291,11 +298,11 @@ handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, con
     {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0),                    
     {noreply, S0#state{vv_lst=VV_LST1, gst=GST, pops=PendingOps1, connector=Connector1}};
 
-handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps0, connector=Connector0, myid=MyId, vv_lst=VV_LST0}) ->
-    LST = dict:foldl(fun(Id, Min) ->
-                        min(dict:fecth(Id, VV), Min)
+handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps0, connector=Connector0, vv_lst=VV_LST0}) ->
+    LST = lists:foldl(fun(Id, Min) ->
+                        min(dict:fetch(Id, VV), Min)
                      end, infinity, dict:fetch_keys(VV)),
-    VV_LST1=dict:store(MyId, LST, VV_LST0),
+    VV_LST1=dict:store(Partition, LST, VV_LST0),
     GST = compute_gst(VV_LST1),
     {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0),                    
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -305,7 +312,7 @@ handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=
                         {Partition, _Node} ->
                             noop;
                         {_OtherPartition, _Node} ->
-                            saturn_proxy_vnode:new_lst(PrefList, Partition, LST)
+                            saturn_proxy_vnode:new_lst(hd(PrefList), Partition, LST)
                     end
                   end, GrossPrefLists),
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
@@ -352,9 +359,9 @@ check_myid(S0) ->
     S0.
     
 compute_gst(VV_LST) ->
-    dict:foldl(fun(Entry, Min) ->
-                min(Min, dict:fetch(Entry, VV_LST))
-               end, infinity, dict:fecth_keys(VV_LST)).
+    _GST = lists:foldl(fun(Entry, Min) ->
+                        min(Min, dict:fetch(Entry, VV_LST))
+                       end, infinity, dict:fetch_keys(VV_LST)).
 
 flush_pending_operations([], _GST, Connector0) ->
     {[], Connector0};
@@ -363,15 +370,15 @@ flush_pending_operations([Next|Rest]=PendingOps0, GST, Connector0) ->
     {TimeStamp, List} = Next,
     case TimeStamp =< GST of
         true ->
-            Connector1 = lists:foreach(fun({Type, Payload}, Acc) ->
-                                        handle_operation(Type, Payload, Acc)
-                                       end, Connector0, List),
+            Connector1 = lists:foldl(fun({Type, Payload}, Acc) ->
+                                        handle_operation(Type, Payload, Acc, GST)
+                                     end, Connector0, List),
             flush_pending_operations(Rest, GST, Connector1);
         false ->
             {PendingOps0, Connector0}
     end.
 
-handle_operation(Type, Payload, Connector0) ->
+handle_operation(Type, Payload, Connector0, GST) ->
     case Type of
         update ->
             {BKey, Value, TimeStamp} = Payload,
@@ -390,7 +397,7 @@ handle_operation(Type, Payload, Connector0) ->
             Connector0;
         remote_reply ->
             {Value, Client, Clock} = Payload,
-            riak_core_vnode:reply(Client, {Value, Clock}),
+            riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}}),
             Connector0;
         _ ->
             lager:error("Unhandled pending operation of type: ~p with payload ~p", [Type, Payload]),

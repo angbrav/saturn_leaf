@@ -48,7 +48,7 @@ propagate(MyId, BKey, Value, TimeStamp, Sender) ->
     gen_server:cast({global, reg_name(MyId)}, {remote_update, BKey, Value, TimeStamp, Sender}).
 
 remote_read(MyId, BKey, Sender, Clock, Client) ->
-    gen_server:cast({global, reg_name(MyId)}, {remote_update, BKey, Sender, Clock, Client}).
+    gen_server:cast({global, reg_name(MyId)}, {remote_read, BKey, Sender, Clock, Client}).
 
 remote_reply(MyId, BKey, Value, Client, Clock) ->
     gen_server:cast({global, reg_name(MyId)}, {remote_reply, BKey, Value, Client, Clock}).
@@ -59,12 +59,12 @@ heartbeat(MyId, Partition, Clock, Sender) ->
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-    Partitions = [Partition || {Partition, _Node} <- GrossPrefLists],
+    Partitions = [Partition || [{Partition, _Node}] <- GrossPrefLists],
     {ok, Entries} = groups_manager_serv:get_all_nodes(), 
     ZeroPreflist = lists:foldl(fun(PrefList, Acc) ->
-                                ok = saturn_proxy_vnode:init_vv(PrefList, Entries, Partitions, MyId),
-                                saturn_proxy_vnode:send_heartbeat(PrefList),
-                                saturn_proxy_vnode:compute_times(PrefList),
+                                ok = saturn_proxy_vnode:init_vv(hd(PrefList), Entries, Partitions, MyId),
+                                saturn_proxy_vnode:send_heartbeat(hd(PrefList)),
+                                saturn_proxy_vnode:compute_times(hd(PrefList)),
                                 case hd(PrefList) of
                                     {0, _Node} ->
                                         PrefList;
@@ -84,18 +84,25 @@ handle_call(Info, From, State) ->
     lager:error("Unhandled message ~p, from ~p", [Info, From]),
     {reply, ok, State}.
 
-handle_cast({remote_update, BKey, Sender, Clock, Client}, S0) ->
+handle_cast({remote_update, BKey, Value, Clock, Sender}, S0) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    riak_core_vnode:propagate(IndexNode, BKey, Sender, Clock, Client),
+    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock, Sender),
+    {noreply, S0};
+
+handle_cast({remote_read, BKey, Sender, Clock, Client}, S0) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:remote_read(IndexNode, BKey, Sender, Clock, Client),
     {noreply, S0};
 
 handle_cast({remote_reply, BKey, Value, Client, Clock}, S0) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    riak_core_vnode:propagate(IndexNode, Value, Client, Clock),
+    saturn_proxy_vnode:remote_reply(IndexNode, Value, Client, Clock),
     {noreply, S0};
 
 handle_cast({heartbeat, Partition, Clock, Sender}, S0=#state{zeropl=ZeroPreflist}) ->
@@ -103,11 +110,10 @@ handle_cast({heartbeat, Partition, Clock, Sender}, S0=#state{zeropl=ZeroPreflist
         0 ->
             IndexNode = ZeroPreflist;
         _ ->
-            DocIdx = riak_core_util:chash_key(Partition - 1),
-            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+            PrefList = riak_core_apl:get_primary_apl(Partition - 1, 1, ?PROXY_SERVICE),
             [{IndexNode, _Type}] = PrefList
     end,
-    riak_core_vnode:heartbeat(IndexNode, Clock, Sender),
+    saturn_proxy_vnode:heartbeat(IndexNode, Clock, Sender),
     {noreply, S0};
 
 handle_cast(_Info, State) ->
