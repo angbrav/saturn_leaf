@@ -42,72 +42,102 @@
          handle_coverage/4,
          handle_exit/3]).
 
--export([read/3,
+-export([init_vv/4,
+         read/3,
          update/4,
-         propagate/4,
-         heartbeat/2,
-         remote_read/2,
-         last_label/1,
+         propagate/5,
+         remote_read/5,
+         remote_reply/4,
+         send_heartbeat/1,
+         heartbeat/3,
+         new_lst/3,
+         compute_times/1,
          check_ready/1]).
 
 -record(state, {partition,
-                max_ts,
+                vv :: dict(),
+                vv_remote :: dict(),
+                vv_lst :: dict(),
+                gst,
+                last_physical,
                 connector,
-                last_label,
+                pops,
                 myid}).
 
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
 
-%Testing purposes
-last_label(BKey) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    riak_core_vnode_master:sync_command(IndexNode,
-                                        last_label,
+init_vv(Node, Entries, Partitions, MyId) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {init_vv, Entries, Partitions, MyId},
                                         ?PROXY_MASTER).
 
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, BKey, Clock},
                                         ?PROXY_MASTER).
-heartbeat(Node, MyId) ->
-    riak_core_vnode_master:command(Node,
-                                   {heartbeat, MyId},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
 
 update(Node, BKey, Value, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {update, BKey, Value, Clock},
                                         ?PROXY_MASTER).
 
-propagate(Node, BKey, Value, TimeStamp) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {propagate, BKey, Value, TimeStamp},
-                                        ?PROXY_MASTER).
+propagate(Node, BKey, Value, TimeStamp, Sender) ->
+    riak_core_vnode_master:command(Node,
+                                   {propagate, BKey, Value, TimeStamp, Sender},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
 
-remote_read(Node, Label) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {remote_read, Label},
-                                        ?PROXY_MASTER).
+remote_read(Node, BKey, Sender, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {remote_read, BKey, Sender, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
 
+remote_reply(Node, Value, Client, Clock) ->
+    riak_core_vnode_master:command(Node,
+                                   {remote_reply, Value, Client, Clock},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+send_heartbeat(Node) ->
+    riak_core_vnode_master:command(Node,
+                                   send_heartbeat,
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+heartbeat(Node, Clock, Sender) ->
+    riak_core_vnode_master:command(Node,
+                                   {heartbeat, Clock, Sender},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+new_lst(Node, Partition, Clock) ->
+    riak_core_vnode_master:command(Node,
+                                   {new_lst, Partition, Clock},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+compute_times(Node) ->
+    riak_core_vnode_master:command(Node,
+                                   compute_times,
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
 
 init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
-                max_ts=0,
-                last_label=none,
+                vv=dict:new(),
+                vv_remote=dict:new(),
+                vv_lst=dict:new(),
+                gst=0,
+                last_physical=0,
+                pops=orddict:new(),
                 connector=Connector
                }}.
 
-%% @doc The table holding the prepared transactions is shared with concurrent
-%%      readers, so they can safely check if a key they are reading is being updated.
-%%      This function checks whether or not all tables have been intialized or not yet.
-%%      Returns true if the have, false otherwise.
 check_ready(Function) ->
     {ok, CHBin} = riak_core_ring_manager:get_chash_bin(),
     PartitionList = chashbin:to_list(CHBin),
@@ -135,27 +165,52 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, BKey, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
-    case groups_manager_serv:do_replicate(BKey) of
-        true ->    
-            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-            {reply, {ok, Value}, S0};
-        false ->
+handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv_lst=VV_LST0, vv_remote=VVRemote0}) ->
+    FilteredEntries = lists:delete(MyId, Entries),
+    VV1 = dcit:foldl(fun(Entry, Acc) ->
+                        dict:store(Entry, 0, Acc)
+                     end, VV0, Entries),
+    VVRemote1 = dcit:foldl(fun(Entry, Acc) ->
+                        dict:store(Entry, 0, Acc)
+                     end, VVRemote0, FilteredEntries),
+    VV_LST1 = dcit:foldl(fun(Partition, Acc) ->
+                            dict:store(Partition, 0, Acc)
+                         end, VV_LST0, Partitions),
+    groups_manager_serv:set_myid(MyId),
+    {reply, ok, S0#state{vv=VV1, vv_lst=VV_LST1, vv_remote=VVRemote1, myid=MyId}};
+
+handle_command({read, BKey, {ClientGST, ClientClock}}, From, S0=#state{myid=MyId, connector=Connector, gst=GST0}) ->
+    GST1 = max(GST0, ClientGST),
+    case groups_manager_serv:get_closest_dcid(BKey) of
+        {ok, MyId} ->
+            {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+            {reply, {ok, {Value, Ts, GST1}}, S0#state{gst=GST1}};
+        {ok, Id} ->
             %Remote read
-            PhysicalClock = saturn_utilities:now_microsec(),
-            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            {ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From}),
-            saturn_leaf_producer:new_label(MyId, Label, Partition),    
-            {noreply, S0#state{max_ts=TimeStamp, last_label=Label}};
+            saturn_leaf_converger:remote_read(Id, BKey, MyId, max(ClientGST, ClientClock), From),
+            {noreply, S0#state{gst=GST1}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0}) ->
-    PhysicalClock = saturn_utilities:now_microsec(),
-    TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
+handle_command({update, BKey, Value, Clock}, _From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, vv=VV0, vv_remote=VVRemote0}) ->
+    PhysicalClock0 = saturn_utilities:now_microsec(),
+    PhysicalClock1 = max(PhysicalClock0, LastPhysical+1),
+    Dif = Clock - PhysicalClock1,
+    case Dif==0 of
+        true ->
+            TimeStamp = PhysicalClock1 + 1;
+        false ->
+            case Dif > 0 of
+                true ->
+                    timer:sleep(trunc(Dif/1000)),
+                    TimeStamp = Clock + 1;
+                false ->
+                    TimeStamp = PhysicalClock1
+            end
+    end,
+    VV1 = dict:store(MyId, TimeStamp, VV0),
     S1 = case groups_manager_serv:do_replicate(BKey) of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
@@ -166,43 +221,95 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, par
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
             S0
     end,
-    Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
-    saturn_leaf_producer:new_label(MyId, Label, Partition),
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
-            lists:foreach(fun(Id) ->
-                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
-                          end, Group);
+            VVRemote1 = lists:foldl(fun(Id) ->
+                                        saturn_leaf_converger:propagate(Id, BKey, Value, TimeStamp, MyId),
+                                        dict:store(Id, TimeStamp)
+                                    end, VVRemote0, Group);
         {error, Reason2} ->
-            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2]),
+            VVRemote1 = VVRemote0
     end,
-    {reply, {ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}};
+    {reply, {ok, TimeStamp}, S1#state{last_physical=PhysicalClock1, vv=VV1, vv_remote=VVRemote1}};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-    {reply, ok, S0#state{connector=Connector1}};
-    
-handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
-    BKeyToRead = Label#label.bkey,
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKeyToRead}),
-    PhysicalClock = saturn_utilities:now_microsec(),
-    TimeStamp = max(PhysicalClock, MaxTS0+1),
-    Payload = Label#label.payload,
-    Bucket = Payload#payload_remote.bucket_source,
-    Client = Payload#payload_remote.client,
-    Source = Label#label.sender,
-    NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
-    saturn_leaf_producer:new_label(MyId, NewLabel, Partition),
-    {reply, ok, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
+handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, pops=PendingOps0}) ->
+    VV1 = dict:store(Sender, TimeStamp, VV0),
+    case GST >= TimeStamp of
+        true ->
+            Connector1 = handle_operation(update, {BKey, Value, TimeStamp}, Connector0),
+            {noreply, S0#state{vv=VV1, connector=Connector1}};
+        false ->
+            PendingOps1 = orddict:append(TimeStamp, {update, {BKey, Value, TimeStamp}}, PendingOps0),
+            {noreply, S0#state{pops=PendingOps1, vv=VV1}}
+    end;
 
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
-    Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
-    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
-    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, max_ts=Clock}};
+handle_command({remote_read, BKey, Sender, Clock, Client}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST}) ->
+    case GST >= Clock of
+        true ->
+            Connector1 = handle_operation(remote_read, {BKey, Sender, Client}, Connector0),
+            {noreply, S0#state{connector=Connector1}};
+        false ->
+            PendingOps1 = orddict:append(Clock, {remote_read, {BKey, Sender, Client}}, PendingOps0),
+            {noreply, S0#state{pops=PendingOps1}}
+    end;
 
-handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
-    {reply, {ok, LastLabel}, S0};
+handle_command({remote_reply, Value, Client, Clock}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST}) ->
+    case GST >= Clock of
+        true ->
+            Connector1 = handle_operation(remote_reply, {Value, Client, Clock}, Connector0),
+            {noreply, S0#state{connector=Connector1}};
+        false ->
+            PendingOps1 = orddict:append(Clock, {remote_reply, {Value, Client, Clock}}, PendingOps0),
+            {noreply, S0#state{pops=PendingOps1}}
+    end;
+
+handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_remote=VVRemote0, myid=MyId}) ->
+    PhysicalClock0 = saturn_utilities:now_microsec(),
+    Max = max(dict:fetch(MyId, VV0), PhysicalClock0),
+    VVRemote1 = lists:foldl(fun(Id, Acc) ->
+                                Clock = dict:fetch(Id, Acc),
+                                case Clock < Max of
+                                    true ->
+                                        saturn_leaf_converger:heartbeat(Id, Partition, Max, MyId),
+                                        dict:store(Id, Max, Acc);
+                                    false ->
+                                        Acc
+                                end
+                            end, VVRemote0, dict:fecth_keys(VVRemote0)),
+    VV1 = dict:store(MyId, Max, VV0),
+    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, send_heartbeat),
+    {noreply, S0#state{vv_remote=VVRemote1, vv=VV1}};
+
+handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
+    VV1 = dict:store(Id, Clock, VV0),
+    {noreply, S0#state{vv=VV1}};
+
+handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=PendingOps0}) ->
+    VV_LST1 = dict:store(Partition, Clock, VV_LST0),
+    GST = compute_gst(VV_LST1),
+    {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0),                    
+    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, pops=PendingOps1, connector=Connector1}};
+
+handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps0, connector=Connector0, myid=MyId, vv_lst=VV_LST0}) ->
+    LST = dict:foldl(fun(Id, Min) ->
+                        min(dict:fecth(Id, VV), Min)
+                     end, infinity, dict:fetch_keys(VV)),
+    VV_LST1=dict:store(MyId, LST, VV_LST0),
+    GST = compute_gst(VV_LST1),
+    {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0),                    
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    case hd(PrefList) of
+                        {Partition, _Node} ->
+                            noop;
+                        {_OtherPartition, _Node} ->
+                            saturn_proxy_vnode:new_lst(PrefList, Partition, LST)
+                    end
+                  end, GrossPrefLists),
+    riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
+    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, pops=PendingOps1, connector=Connector1}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -242,21 +349,50 @@ terminate(_Reason, _State) ->
     ok.
 
 check_myid(S0) ->
-    Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
-    case Value of
-        undefined ->
-            timer:sleep(100),
-            check_myid(S0);
-        MyId ->
-            groups_manager_serv:set_myid(MyId),
-            S0#state{myid=MyId}
-    end.
+    S0.
     
-create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
-    #label{operation=Operation,
-           bkey=BKey,
-           timestamp=TimeStamp,
-           node=Node,
-           sender=Id,
-           payload=Payload
-           }.
+compute_gst(VV_LST) ->
+    dict:foldl(fun(Entry, Min) ->
+                min(Min, dict:fetch(Entry, VV_LST))
+               end, infinity, dict:fecth_keys(VV_LST)).
+
+flush_pending_operations([], _GST, Connector0) ->
+    {[], Connector0};
+
+flush_pending_operations([Next|Rest]=PendingOps0, GST, Connector0) ->
+    {TimeStamp, List} = Next,
+    case TimeStamp =< GST of
+        true ->
+            Connector1 = lists:foreach(fun({Type, Payload}, Acc) ->
+                                        handle_operation(Type, Payload, Acc)
+                                       end, Connector0, List),
+            flush_pending_operations(Rest, GST, Connector1);
+        false ->
+            {PendingOps0, Connector0}
+    end.
+
+handle_operation(Type, Payload, Connector0) ->
+    case Type of
+        update ->
+            {BKey, Value, TimeStamp} = Payload,
+            {ok, {_StoredValue, StoredTimeStamp}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+            case StoredTimeStamp =< TimeStamp of
+                true ->
+                    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+                    Connector1;
+                false ->
+                    Connector0
+            end;
+        remote_read ->
+            {BKey, Sender, Client} = Payload,
+            {ok, {StoredValue, StoredTimeStamp}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+            saturn_leaf_converger:remote_reply(Sender, BKey, StoredValue, Client, StoredTimeStamp),
+            Connector0;
+        remote_reply ->
+            {Value, Client, Clock} = Payload,
+            riak_core_vnode:reply(Client, {Value, Clock}),
+            Connector0;
+        _ ->
+            lager:error("Unhandled pending operation of type: ~p with payload ~p", [Type, Payload]),
+            Connector0
+    end.

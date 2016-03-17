@@ -31,10 +31,12 @@
 -export([start_link/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([handle/2]).
+-export([heartbeat/4,
+         propagate/5,
+         remote_read/5, 
+         remote_reply/5]).
 
--record(state, {labels_queue :: queue(),
-                ops_dict :: dict(),
+-record(state, {zeropl,
                 myid}).
                
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
@@ -42,38 +44,71 @@ reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
 start_link(MyId) ->
     gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
-handle(MyId, Message) ->
-    %lager:info("Message received: ~p", [Message]),
-    gen_server:call({global, reg_name(MyId)}, Message, infinity).
+propagate(MyId, BKey, Value, TimeStamp, Sender) ->
+    gen_server:cast({global, reg_name(MyId)}, {remote_update, BKey, Value, TimeStamp, Sender}).
+
+remote_read(MyId, BKey, Sender, Clock, Client) ->
+    gen_server:cast({global, reg_name(MyId)}, {remote_update, BKey, Sender, Clock, Client}).
+
+remote_reply(MyId, BKey, Value, Client, Clock) ->
+    gen_server:cast({global, reg_name(MyId)}, {remote_reply, BKey, Value, Client, Clock}).
+ 
+heartbeat(MyId, Partition, Clock, Sender) ->
+    gen_server:cast({global, reg_name(MyId)}, {heartbeat, Partition, Clock, Sender}).
 
 init([MyId]) ->
-    {ok, #state{labels_queue=queue:new(),
-                ops_dict=dict:new(),
-                myid=MyId}}.
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    Partitions = [Partition || {Partition, _Node} <- GrossPrefLists],
+    {ok, Entries} = groups_manager_serv:get_all_nodes(), 
+    ZeroPreflist = lists:foldl(fun(PrefList, Acc) ->
+                                ok = saturn_proxy_vnode:init_vv(PrefList, Entries, Partitions, MyId),
+                                saturn_proxy_vnode:send_heartbeat(PrefList),
+                                saturn_proxy_vnode:compute_times(PrefList),
+                                case hd(PrefList) of
+                                    {0, _Node} ->
+                                        PrefList;
+                                    {_OtherPartition, _Node} ->
+                                        Acc
+                                end
+                               end, not_found, GrossPrefLists),
+    case ZeroPreflist of
+        not_found ->
+            lager:error("Zero preflist not found", []),
+            {ok, #state{myid=MyId, zeropl=not_found}};
+        _ ->
+            {ok, #state{myid=MyId, zeropl=ZeroPreflist}}
+    end.
 
-handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
-    %lager:info("New stream received. Label: ~p", Stream),
-    case queue:len(Labels0) of
+handle_call(Info, From, State) ->
+    lager:error("Unhandled message ~p, from ~p", [Info, From]),
+    {reply, ok, State}.
+
+handle_cast({remote_update, BKey, Sender, Clock, Client}, S0) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    riak_core_vnode:propagate(IndexNode, BKey, Sender, Clock, Client),
+    {noreply, S0};
+
+handle_cast({remote_reply, BKey, Value, Client, Clock}, S0) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    riak_core_vnode:propagate(IndexNode, Value, Client, Clock),
+    {noreply, S0};
+
+handle_cast({heartbeat, Partition, Clock, Sender}, S0=#state{zeropl=ZeroPreflist}) ->
+    case Partition of
         0 ->
-            S1 = flush_queue(Stream, S0);
+            IndexNode = ZeroPreflist;
         _ ->
-            Labels1 = queue:join(Labels0, queue:from_list(Stream)),
-            S1 = S0#state{labels_queue=Labels1}
+            DocIdx = riak_core_util:chash_key(Partition - 1),
+            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+            [{IndexNode, _Type}] = PrefList
     end,
-    {reply, ok, S1};
-
-handle_call({new_operation, Label, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
-    %lager:info("New operation received. Label: ~p", [Label]),
-    case queue:peek(Labels0) of
-        {value, Label} ->
-            ok = execute_operation(Label, Value),
-            Labels1 = queue:drop(Labels0),
-            S1 = flush_queue(queue:to_list(Labels1), S0);
-        _ ->
-            Ops1 = dict:store(Label, Value, Ops0),
-            S1 = S0#state{ops_dict=Ops1}
-    end,
-    {reply, ok, S1}.
+    riak_core_vnode:heartbeat(IndexNode, Clock, Sender),
+    {noreply, S0};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -86,64 +121,6 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
-
-execute_operation(Label, Value) ->
-    BKey = Label#label.bkey,
-    Clock = Label#label.timestamp,
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
-
-flush_queue([], S0) ->
-    S0#state{labels_queue=queue:new()};
-
-flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
-    case Label#label.operation of
-        remote_read ->
-            Payload = Label#label.payload,
-            Destination = Payload#payload_remote.to,
-            case is_sent_to_me(Destination, MyId) of
-                true ->
-                    BKey = Label#label.bkey,
-                    DocIdx = riak_core_util:chash_key(BKey),
-                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-                    [{IndexNode, _Type}] = PrefList,
-                    saturn_proxy_vnode:remote_read(IndexNode, Label);
-                false ->
-                    noop
-            end,
-            flush_queue(Rest, S0);
-        remote_reply ->
-            Payload = Label#label.payload,
-            Destination = Payload#payload_reply.to,
-            case is_sent_to_me(Destination, MyId) of
-                true ->
-                    Client = Payload#payload_reply.client,
-                    Value = Payload#payload_reply.value,
-                    riak_core_vnode:reply(Client, {ok, {Value, 0}});
-                false ->
-                    noop
-            end,
-            flush_queue(Rest, S0);
-        update ->
-            case dict:find(Label, Ops0) of
-                {ok, Value} ->
-                    ok = execute_operation(Label, Value),
-                    Ops1 = dict:erase(Label, Ops0),
-                    flush_queue(Rest, S0#state{ops_dict=Ops1});
-                _ ->
-                    lager:info("Operation not received for label: ~p", [Label]),
-                    S0#state{labels_queue=queue:from_list(Labels)}
-            end
-    end.
-
-is_sent_to_me(Destination, MyId) ->
-    case Destination of
-        all -> true;
-        MyId -> true;
-        _ -> false
-    end.
 
 -ifdef(TEST).
 

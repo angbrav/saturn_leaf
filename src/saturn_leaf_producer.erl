@@ -60,7 +60,7 @@ init([MyId]) ->
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     Dict = lists:foldl(fun(PrefList, Acc) ->
                         {Partition, _Node} = hd(PrefList),
-                        saturn_proxy_vnode:heartbeat(PrefList, MyId),
+                        saturn_proxy_vnode:send_heartbeat(PrefList, MyId),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
     {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, delay=0}}.
