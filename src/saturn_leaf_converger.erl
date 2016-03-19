@@ -28,57 +28,41 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([start_link/1]).
+-export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([heartbeat/4,
          propagate/5,
          remote_read/5, 
+         set_zeropl/2,
          remote_reply/5]).
 
--record(state, {zeropl,
-                myid}).
+-record(state, {zeropl}).
                
-reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
+start_link() ->
+    Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)),
+    gen_server:start({global, Name}, ?MODULE, [], []).
 
-start_link(MyId) ->
-    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
+propagate(Name, BKey, Value, TimeStamp, Sender) ->
+    gen_server:cast({global, Name}, {remote_update, BKey, Value, TimeStamp, Sender}).
 
-propagate(MyId, BKey, Value, TimeStamp, Sender) ->
-    gen_server:cast({global, reg_name(MyId)}, {remote_update, BKey, Value, TimeStamp, Sender}).
+remote_read(Name, BKey, Sender, Clock, Client) ->
+    gen_server:cast({global, Name}, {remote_read, BKey, Sender, Clock, Client}).
 
-remote_read(MyId, BKey, Sender, Clock, Client) ->
-    gen_server:cast({global, reg_name(MyId)}, {remote_read, BKey, Sender, Clock, Client}).
-
-remote_reply(MyId, BKey, Value, Client, Clock) ->
-    gen_server:cast({global, reg_name(MyId)}, {remote_reply, BKey, Value, Client, Clock}).
+remote_reply(Name, BKey, Value, Client, Clock) ->
+    gen_server:cast({global, Name}, {remote_reply, BKey, Value, Client, Clock}).
  
-heartbeat(MyId, Partition, Clock, Sender) ->
-    gen_server:cast({global, reg_name(MyId)}, {heartbeat, Partition, Clock, Sender}).
+heartbeat(Name, Partition, Clock, Sender) ->
+    gen_server:cast({global, Name}, {heartbeat, Partition, Clock, Sender}).
 
-init([MyId]) ->
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-    Partitions = [Partition || [{Partition, _Node}] <- GrossPrefLists],
-    {ok, Entries} = groups_manager_serv:get_all_nodes(), 
-    ZeroPreflist = lists:foldl(fun(PrefList, Acc) ->
-                                ok = saturn_proxy_vnode:init_vv(hd(PrefList), Entries, Partitions, MyId),
-                                saturn_proxy_vnode:send_heartbeat(hd(PrefList)),
-                                saturn_proxy_vnode:compute_times(hd(PrefList)),
-                                case hd(PrefList) of
-                                    {0, _Node} ->
-                                        PrefList;
-                                    {_OtherPartition, _Node} ->
-                                        Acc
-                                end
-                               end, not_found, GrossPrefLists),
-    case ZeroPreflist of
-        not_found ->
-            lager:error("Zero preflist not found", []),
-            {ok, #state{myid=MyId, zeropl=not_found}};
-        _ ->
-            {ok, #state{myid=MyId, zeropl=ZeroPreflist}}
-    end.
+set_zeropl(Name, ZeroPreflist) ->
+    gen_server:call({global, Name}, {set_zeropl, ZeroPreflist}, infinity).
+
+init([]) ->
+    {ok, #state{zeropl=not_found}}.
+
+handle_call({set_zeropl, ZeroPreflist}, _From, S0) ->
+    {reply, ok, S0#state{zeropl=ZeroPreflist}};
 
 handle_call(Info, From, State) ->
     lager:error("Unhandled message ~p, from ~p", [Info, From]),

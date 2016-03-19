@@ -29,9 +29,9 @@ confirm() ->
     pong = rpc:call(Leaf1, net_adm, ping, [Leaf3]),
     pong = rpc:call(Leaf2, net_adm, ping, [Leaf3]),
 
-     rt:wait_for_service(Leaf1, saturn_proxy),
-     rt:wait_for_service(Leaf2, saturn_proxy),
-     rt:wait_for_service(Leaf3, saturn_proxy),
+    rt:wait_for_service(Leaf1, saturn_proxy),
+    rt:wait_for_service(Leaf2, saturn_proxy),
+    rt:wait_for_service(Leaf3, saturn_proxy),
     
     Tree0 = dict:store(0, [-1, 300, 80], dict:new()),
     Tree1 = dict:store(1, [300, -1, 70], Tree0),
@@ -49,6 +49,10 @@ confirm() ->
     {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
     %% Starting leaf3
     {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
+
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1]),
+    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2]),
 
     lager:info("Waiting until vnodes are started up"),
     rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
