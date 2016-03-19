@@ -28,28 +28,26 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([start_link/1]).
+-export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([handle/2]).
 
 -record(state, {labels_queue :: queue(),
-                ops_dict :: dict(),
-                myid}).
+                ops_dict :: dict()}).
                
-reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
 
-start_link(MyId) ->
-    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
+start_link() ->
+    Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)),
+    gen_server:start({global, Name}, ?MODULE, [], []).
 
-handle(MyId, Message) ->
+handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
-    gen_server:call({global, reg_name(MyId)}, Message, infinity).
+    gen_server:call({global, Name}, Message, infinity).
 
-init([MyId]) ->
+init([]) ->
     {ok, #state{labels_queue=queue:new(),
-                ops_dict=dict:new(),
-                myid=MyId}}.
+                ops_dict=dict:new()}}.
 
 handle_call({new_operation, Label, Value}, _From, S0) ->
     %lager:info("New operation received. Label: ~p", [Label]),

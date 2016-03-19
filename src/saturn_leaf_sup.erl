@@ -45,9 +45,6 @@ start_leaf(Port, MyId) ->
 
     riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
 
-    supervisor:start_child(?MODULE, {saturn_leaf_converger,
-                    {saturn_leaf_converger, start_link, [MyId]},
-                    permanent, 5000, worker, [saturn_leaf_converger]}),
     
     case ?PROPAGATION_MODE of
         short_tcp ->
@@ -66,6 +63,10 @@ start_leaf(Port, MyId) ->
                     {saturn_leaf_producer, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_producer]}),
 
+    supervisor:start_child(?MODULE, {saturn_leaf_receiver,
+                    {saturn_leaf_receiver, start_link, [MyId]},
+                    permanent, 5000, worker, [saturn_leaf_receiver]}),
+
     {ok, {Host, Port}}.
 
 %% ===================================================================
@@ -79,7 +80,10 @@ init(_Args) ->
     PropagatorSup = {saturn_leaf_propagation_fsm_sup,
                     {saturn_leaf_propagation_fsm_sup, start_link, []},
                     permanent, 5000, supervisor, [saturn_leaf_propagation_fsm_sup]},
-    Childs0 = [ProxyMaster, PropagatorSup],
+    Converger = {saturn_leaf_converger,
+                {saturn_leaf_converger, start_link, []},
+                permanent, 5000, worker, [saturn_leaf_converger]},
+    Childs0 = [ProxyMaster, PropagatorSup, Converger],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,

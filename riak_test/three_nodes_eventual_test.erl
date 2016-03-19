@@ -27,19 +27,6 @@ confirm() ->
     pong = rpc:call(Leaf1, net_adm, ping, [Leaf3]),
     pong = rpc:call(Leaf2, net_adm, ping, [Leaf3]),
 
-    %% Starting leaf1
-    {ok, HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
-    %% Starting leaf2
-    {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
-    %% Starting leaf3
-    {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
-
-    lager:info("Waiting until vnodes are started up"),
-    rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
-    rt:wait_until(hd(Cluster2),fun wait_init:check_ready/1),
-    rt:wait_until(hd(Cluster3),fun wait_init:check_ready/1),
-    lager:info("Vnodes are started up"),
-  
     Tree0 = dict:store(0, [-1, 300, 80], dict:new()),
     Tree1 = dict:store(1, [300, -1, 70], Tree0),
     Tree2 = dict:store(2, [80, 70, -1], Tree1),
@@ -50,6 +37,22 @@ confirm() ->
 
     ok = common_rt:set_tree_clusters(Clusters, Tree2, 2),
     ok = common_rt:set_groups_clusters(Clusters, Groups2), 
+    %% Starting leaf1
+    {ok, HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
+    %% Starting leaf2
+    {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
+    %% Starting leaf3
+    {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
+
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1]),
+    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2]),
+
+    lager:info("Waiting until vnodes are started up"),
+    rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
+    rt:wait_until(hd(Cluster2),fun wait_init:check_ready/1),
+    rt:wait_until(hd(Cluster3),fun wait_init:check_ready/1),
+    lager:info("Vnodes are started up"),
 
     ok = common_rt:new_node_cluster(Cluster1, 1, HostPortLeaf2),
     ok = common_rt:new_node_cluster(Cluster1, 2, HostPortLeaf3),

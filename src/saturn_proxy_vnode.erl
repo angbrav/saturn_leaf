@@ -48,12 +48,14 @@
          heartbeat/2,
          remote_read/2,
          last_label/1,
+         set_receivers/2,
          check_ready/1]).
 
 -record(state, {partition,
                 max_ts,
                 connector,
                 last_label,
+                receivers,
                 myid}).
 
 %% API
@@ -77,6 +79,11 @@ read(Node, BKey, Clock) ->
 update(Node, BKey, Value, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {update, BKey, Value, Clock},
+                                        ?PROXY_MASTER).
+
+set_receivers(Node, Receivers) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_receivers, Receivers},
                                         ?PROXY_MASTER).
 
 propagate(Node, BKey, Value, TimeStamp) ->
@@ -137,7 +144,7 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({read, BKey, _Clock}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition}) ->
+handle_command({read, BKey, _Clock}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers}) ->
     case groups_manager_serv:get_closest_dcid(BKey) of
         {ok, MyId} ->
             {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
@@ -145,14 +152,15 @@ handle_command({read, BKey, _Clock}, From, S0=#state{connector=Connector, myid=M
         {ok, Id} ->
             %Remote read
             Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From}),
-            saturn_leaf_converger:handle(Id, {remote_read, Label}),
+            Receiver = dict:fetch(Id, Receivers),
+            saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
             {noreply, S0};
         {error, Reason} ->
             lager:error("BKey ~p ~p is not replicated",  [BKey, Reason]),
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, _Clock}, _From, S0=#state{partition=Partition, myid=MyId, connector=Connector0}) ->
+handle_command({update, BKey, Value, _Clock}, _From, S0=#state{partition=Partition, myid=MyId, connector=Connector0, receivers=Receivers}) ->
     S1 = case groups_manager_serv:do_replicate(BKey) of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
@@ -167,12 +175,16 @@ handle_command({update, BKey, Value, _Clock}, _From, S0=#state{partition=Partiti
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
-                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
+                            Receiver = dict:fetch(Id, Receivers),
+                            saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
     end,
     {reply, {ok, 0}, S1};
+
+handle_command({set_receivers, Receivers}, _From, S0) ->
+    {reply, ok, S0#state{receivers=Receivers}};
 
 handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
