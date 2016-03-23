@@ -34,7 +34,8 @@
 -export([handle/2]).
 
 -record(state, {labels_queue :: queue(),
-                ops_dict :: dict(),
+                ops,
+                queue_len,
                 myid}).
                
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
@@ -47,33 +48,37 @@ handle(MyId, Message) ->
     gen_server:call({global, reg_name(MyId)}, Message, infinity).
 
 init([MyId]) ->
+    Ops = ets:new(operations_converger, [set, named_table]),
     {ok, #state{labels_queue=queue:new(),
-                ops_dict=dict:new(),
+                ops=Ops,
+                queue_len=0,
                 myid=MyId}}.
 
-handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Labels0, ops_dict=_Ops0}) ->
+handle_call({new_stream, Stream, _SenderId}, _From, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId}) ->
     %lager:info("New stream received. Label: ~p", Stream),
-    case queue:len(Labels0) of
+    case QL0 of
         0 ->
-            S1 = flush_queue(Stream, S0);
+            {Labels1, QL1} = flush_list(Stream, Ops, MyId),
+            {reply, ok, S0#state{labels_queue=Labels1, queue_len=QL1}}; 
         _ ->
-            Labels1 = queue:join(Labels0, queue:from_list(Stream)),
-            S1 = S0#state{labels_queue=Labels1}
-    end,
-    {reply, ok, S1};
+            {Labels1, Total} = lists:foldl(fun(Elem, Sum) ->
+                                            {queue:in(Elem, Labels0), Sum + 1}
+                                           end, 0, Stream),
+            {reply, ok, S0#state{labels_queue=Labels1, queue_len=QL0+Total}}
+    end;
 
-handle_call({new_operation, Label, Value}, _From, S0=#state{labels_queue=Labels0, ops_dict=Ops0}) ->
+handle_call({new_operation, Label, Value}, _From, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
             ok = execute_operation(Label, Value),
             Labels1 = queue:drop(Labels0),
-            S1 = flush_queue(queue:to_list(Labels1), S0);
+            {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId),
+            {reply, ok, S0#state{labels_queue=Labels2, queue_len=QL1}};
         _ ->
-            Ops1 = dict:store(Label, Value, Ops0),
-            S1 = S0#state{ops_dict=Ops1}
-    end,
-    {reply, ok, S1}.
+            true = ets:insert(Ops, {Label, Value}),
+            {reply, ok, S0}
+    end.
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -95,10 +100,31 @@ execute_operation(Label, Value) ->
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
 
-flush_queue([], S0) ->
-    S0#state{labels_queue=queue:new()};
+flush_list([], _Ops, _MyId) ->
+    {queue:new(), 0};
 
-flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
+flush_list([Label|Rest]=List, Ops, MyId) ->
+    case handle_label(Label, Ops, MyId) of
+        true ->
+            flush_list(Rest, Ops, MyId);
+        false ->
+            {queue:from_list(List), length(List)}
+    end.
+
+flush_queue(Queue, Length, Ops, MyId) ->
+    case queue:peek(Queue) of
+        {value, Label} ->
+            case handle_label(Label, Ops, MyId) of
+                true ->
+                    flush_queue(queue:drop(Queue), Length - 1, Ops, MyId);
+                false ->
+                    {Queue, Length}
+            end;
+        _ ->
+            {queue:new(), 0}
+    end.
+
+handle_label(Label, Ops, MyId) ->
     case Label#label.operation of
         remote_read ->
             Payload = Label#label.payload,
@@ -113,7 +139,7 @@ flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
                 false ->
                     noop
             end,
-            flush_queue(Rest, S0);
+            true;
         remote_reply ->
             Payload = Label#label.payload,
             Destination = Payload#payload_reply.to,
@@ -125,16 +151,16 @@ flush_queue([Label|Rest]=Labels, S0=#state{ops_dict=Ops0, myid=MyId}) ->
                 false ->
                     noop
             end,
-            flush_queue(Rest, S0);
+            true;
         update ->
-            case dict:find(Label, Ops0) of
-                {ok, Value} ->
+            case ets:lookup(Ops, Label) of
+                [{Label, Value}] ->
                     ok = execute_operation(Label, Value),
-                    Ops1 = dict:erase(Label, Ops0),
-                    flush_queue(Rest, S0#state{ops_dict=Ops1});
-                _ ->
+                    true = ets:delete(Ops, Label),
+                    true;
+                [] ->
                     lager:info("Operation not received for label: ~p", [Label]),
-                    S0#state{labels_queue=queue:from_list(Labels)}
+                    false
             end
     end.
 

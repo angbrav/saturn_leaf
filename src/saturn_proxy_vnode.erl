@@ -45,7 +45,8 @@
 -export([read/3,
          update/4,
          propagate/4,
-         heartbeat/2,
+         heartbeat/1,
+         init_proxy/2,
          remote_read/2,
          last_label/1,
          check_ready/1]).
@@ -69,13 +70,17 @@ last_label(BKey) ->
                                         last_label,
                                         ?PROXY_MASTER).
 
+init_proxy(Node, MyId) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {init_proxy, MyId},
+                                        ?PROXY_MASTER).
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, BKey, Clock},
                                         ?PROXY_MASTER).
-heartbeat(Node, MyId) ->
+heartbeat(Node) ->
     riak_core_vnode_master:command(Node,
-                                   {heartbeat, MyId},
+                                   heartbeat,
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -128,12 +133,12 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
             false
     end.
 
-handle_command({check_myid_ready}, _Sender, S0) ->
-    S1 = check_myid(S0),
-    {reply, true, S1};
-
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
+
+handle_command({init_proxy, MyId}, _From, S0) ->
+    groups_manager_serv:set_myid(MyId),
+    {reply, ok, S0#state{myid=MyId}};
 
 handle_command({read, BKey, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
     case groups_manager_serv:do_replicate(BKey) of
@@ -146,7 +151,7 @@ handle_command({read, BKey, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, pa
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
             {ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
             Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From}),
-            saturn_leaf_producer:new_label(MyId, Label, Partition),    
+            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
             {noreply, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
@@ -167,7 +172,7 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, par
             S0
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
-    saturn_leaf_producer:new_label(MyId, Label, Partition),
+    saturn_leaf_producer:new_label(MyId, Label, Partition, true),
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
@@ -192,14 +197,14 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Client = Payload#payload_remote.client,
     Source = Label#label.sender,
     NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
-    saturn_leaf_producer:new_label(MyId, NewLabel, Partition),
+    saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {reply, ok, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
+handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
     saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
-    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, max_ts=Clock}};
+    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
+    {noreply, S0#state{max_ts=Clock}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
@@ -241,17 +246,6 @@ handle_exit(_Pid, _Reason, State) ->
 terminate(_Reason, _State) ->
     ok.
 
-check_myid(S0) ->
-    Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
-    case Value of
-        undefined ->
-            timer:sleep(100),
-            check_myid(S0);
-        MyId ->
-            groups_manager_serv:set_myid(MyId),
-            S0#state{myid=MyId}
-    end.
-    
 create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
     #label{operation=Operation,
            bkey=BKey,
