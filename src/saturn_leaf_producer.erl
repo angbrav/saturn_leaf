@@ -32,12 +32,13 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([partition_heartbeat/3,
-         delayed_delivery/3,
-         label_delivered/2,
-         new_label/3]).
+         check_ready/1,
+         new_label/4]).
 
 -record(state, {vclock :: dict(),
                 delay,
+                stable_time,
+                pending,
                 labels :: list(),
                 myid}).
                 
@@ -49,52 +50,68 @@ start_link(MyId) ->
 partition_heartbeat(MyId, Partition, Clock) ->
     gen_server:cast({global, reg_name(MyId)}, {partition_heartbeat, Partition, Clock}).
     
-new_label(MyId, Label, Partition) ->
-    gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition}).
+new_label(MyId, Label, Partition, IsUpdate) ->
+    gen_server:cast({global, reg_name(MyId)}, {new_label, Label, Partition, IsUpdate}).
 
-label_delivered(MyId, Element) ->
-    gen_server:cast({global, reg_name(MyId)}, {label_delivered, Element}).
+check_ready(MyId) ->
+    gen_server:call({global, reg_name(MyId)}, check_ready, infinity).
 
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     Dict = lists:foldl(fun(PrefList, Acc) ->
                         {Partition, _Node} = hd(PrefList),
-                        saturn_proxy_vnode:heartbeat(PrefList, MyId),
+                        ok = saturn_proxy_vnode:init_proxy(hd(PrefList), MyId),
+                        saturn_proxy_vnode:heartbeat(PrefList),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
-    {ok, #state{labels=orddict:new(), myid=MyId, vclock=Dict, delay=0}}.
+    Labels = ets:new(labels_producer, [ordered_set, named_table]),
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=0, stable_time=0, pending=false}}.
 
-handle_cast({partition_heartbeat, Partition, Clock}, S0) ->
-    S1 = update_vclock(Partition, Clock, S0),
-    S2 = deliver_labels(S1),
-    {noreply, S2};
+handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=Pending0, stable_time=StableTime0, labels=Labels, myid=MyId}) ->
+    VClock1 = dict:store(Partition, Clock, VClock0),
+    StableTime1 = compute_stable(VClock1),
+    case (Pending0==false) and (StableTime1 > StableTime0) of
+        true ->
+            Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
+            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
+        false ->
+            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
+    end;
 
-handle_cast({new_label, Label, Partition}, S0=#state{labels=Labels0}) ->
-    Now = saturn_utilities:now_milisec(),
+handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=StableTime0, myid=MyId, pending=Pending0, delay=Delay}) ->
     TimeStamp = Label#label.timestamp,
-    Labels1 = orddict:append(TimeStamp, {Now, Label}, Labels0),
-    S1 = update_vclock(Partition, TimeStamp, S0#state{labels=Labels1}),
-    S2 = deliver_labels(S1),
-    {noreply, S2};
-
-handle_cast({label_delivered, Element}, S0=#state{labels=Labels0})->
-    [{TimeStamp, ListLabels}|Rest] = Labels0,
-    case lists:delete(Element, ListLabels) of
-        [] ->
-            S1 = deliver_labels(S0#state{labels=Rest});
-        Other ->
-            Labels1 = [{TimeStamp, Other}] ++ Rest,
-            S1 = S0#state{labels=Labels1}
+    case IsUpdate of
+        true ->
+            Now = saturn_utilities:now_microsec(),
+            Time = Now + Delay;
+        false ->
+            Time = 0
     end,
-    {noreply, S1};
-    
+    ets:insert(Labels, {{TimeStamp, Time, Partition, Label}, in}),
+    VClock1 = dict:store(Partition, TimeStamp, VClock0),
+    StableTime1 = compute_stable(VClock1),
+    case (Pending0==false) and (StableTime1 > StableTime0) of
+        true ->
+            Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
+            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
+        false ->
+            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
+    end;
+
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_call(check_ready, _From, S0) ->
+    {reply, ok, S0};
 
 handle_call(Info, From, State) ->
     lager:error("Weird message: ~p. From: ~p", [Info, From]),
     {noreply, State}.
+
+handle_info(find_deliverables, S0=#state{stable_time=StableTime0, myid=MyId, labels=Labels}) ->
+    Pending1 = deliver_labels(Labels, StableTime0, MyId, []),
+    {noreply, S0#state{pending=Pending1}};
 
 handle_info(Info, State) ->
     lager:info("Weird message: ~p", [Info]),
@@ -106,69 +123,34 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-update_vclock(Partition, TimeStamp, S0=#state{vclock=VClock0}) ->
-    VClock1 = dict:store(Partition, TimeStamp, VClock0),
-    S0#state{vclock=VClock1}.
-
-deliver_labels(S0=#state{vclock=Clocks, labels=Labels0, myid=MyId, delay=Delay}) ->
-    StableTime = compute_stable_time(Clocks),
-    Labels1 = filter_labels(Labels0, StableTime, MyId, Delay),
-    S0#state{labels=Labels1}.
-
-compute_stable_time(Clocks) ->
-    ListClocks = dict:to_list(Clocks),
-    [First|Rest] = ListClocks,
-    {_FirstPartition, FirstClock} = First,
+compute_stable(VClock) ->
     lists:foldl(fun({_Partition, Clock}, Min) ->
-                    case Clock<Min of
-                        true ->
-                            Clock;
-                        false ->
-                            Min
-                    end
-                end, FirstClock, Rest). 
+                    min(Clock, Min)
+                 end, infinity, dict:to_list(VClock)).
 
-filter_labels([], _StableTime, _MyId, _Delay)->
-    [];
-
-filter_labels([H|Rest], StableTime, MyId, Delay) ->
-    {TimeStamp, ListLabels} = H,
-    case TimeStamp =< StableTime of
-        true ->
-            Now = saturn_utilities:now_milisec(),
-            {FinalStream, Leftovers} = lists:foldl(fun({Time, Label}, {FinalStream0, Leftovers0}) ->
-                                                BKey = Label#label.bkey,
-                                                case (Time + Delay) > Now of
-                                                    true ->
-                                                        {FinalStream0, Leftovers0 ++ [{Time, Label}]};
-                                                    false ->
-                                                        {FinalStream0 ++ [{BKey, Label}], Leftovers0 }
-                                                end
-                                              end, {[], []}, ListLabels),
-            propagate_stream(FinalStream, MyId),
-            case Leftovers of
-                [] ->
-                    filter_labels(Rest, StableTime, MyId, Delay);
-                _ ->
-                    lists:foreach(fun({Time, _Label}=Element) ->
-                                    spawn(saturn_leaf_producer, delayed_delivery, [MyId, (Time+Delay)-saturn_utilities:now_milisec(), Element])
-                                  end, Leftovers),
-                    [{TimeStamp, Leftovers}|Rest]
+deliver_labels(Labels, StableTime, MyId, Deliverables0) ->
+    case ets:first(Labels) of
+        '$end_of_table' ->
+            propagate_stream(lists:reverse(Deliverables0), MyId),
+            false;
+        {TimeStamp, Time, _Partition, Label}=Key when TimeStamp =< StableTime ->
+            Now = saturn_utilities:now_microsec(),
+            case Time > Now of
+                true ->
+                    propagate_stream(lists:reverse(Deliverables0), MyId),
+                    NextDelivery = trunc((Time - Now)/1000),
+                    erlang:send_after(NextDelivery, self(), find_deliverables),                   
+                    true;
+                false ->
+                    true = ets:delete(Labels, Key),
+                    BKey = Label#label.bkey,
+                    deliver_labels(Labels, StableTime, MyId, [{BKey, Label}|Deliverables0]),
+                    false
             end;
-        false ->
-            [H|Rest]
+        _Key ->
+            propagate_stream(lists:reverse(Deliverables0), MyId),
+            false
     end.
-
-delayed_delivery(MyId, Delay, {Time, Label}) ->
-    case Delay>0 of
-        true ->
-            timer:sleep(trunc(Delay));
-        false ->
-            noop
-    end,
-    BKey = Label#label.bkey,
-    propagate_stream([{BKey, Label}], MyId),
-    saturn_leaf_producer:label_delivered(MyId, {Time, Label}).
 
 propagate_stream(FinalStream, MyId) ->
     case ?PROPAGATION_MODE of
@@ -199,6 +181,6 @@ propagate_stream(FinalStream, MyId) ->
 compute_stable_clock_test() ->
     Clocks = [{p1, 1}, {p2, 2}, {p3, 4}],
     Dict = dict:from_list(Clocks),
-    ?assertEqual(1, compute_stable_time(Dict)).
+    ?assertEqual(1, compute_stable(Dict)).
 
 -endif.
