@@ -135,13 +135,15 @@ set_receivers(Node, Receivers) ->
 init([Partition]) ->
     lager:info("Vnode init: ~p", [Partition]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(gentle_rain_pops)),
+    POps = ets:new(Name, [ordered_set, named_table]),
     {ok, #state{partition=Partition,
                 vv=dict:new(),
                 vv_remote=dict:new(),
                 vv_lst=dict:new(),
                 gst=0,
                 last_physical=0,
-                pops=orddict:new(),
+                pops=POps,
                 connector=Connector
                }}.
 
@@ -245,7 +247,7 @@ handle_command({update, BKey, Value, Clock}, _From, S0=#state{last_physical=Last
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
-handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, pops=PendingOps0, receivers=Receivers}) ->
+handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, pops=PendingOps, receivers=Receivers}) ->
     %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, TimeStamp, Sender]),
     VV1 = dict:store(Sender, TimeStamp, VV0),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, TimeStamp]),
@@ -254,32 +256,32 @@ handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{con
             Connector1 = handle_operation(update, {BKey, Value, TimeStamp}, Connector0, GST, Receivers),
             {noreply, S0#state{vv=VV1, connector=Connector1}};
         false ->
-            PendingOps1 = orddict:append(TimeStamp, {update, {BKey, Value, TimeStamp}}, PendingOps0),
-            {noreply, S0#state{pops=PendingOps1, vv=VV1}}
+            ets:insert(PendingOps, {{TimeStamp, Sender, {update, {BKey, Value, TimeStamp}}}, in}),
+            {noreply, S0#state{vv=VV1}}
     end;
 
-handle_command({remote_read, BKey, Sender, Clock, Client}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST, receivers=Receivers}) ->
-    lager:info("Received a remote read. Key ~p, Sender ~p, TS ~p, Client ~p",[BKey, Sender, Clock, Client]),
-    lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
+handle_command({remote_read, BKey, Sender, Clock, Client}, _From, S0=#state{pops=PendingOps, connector=Connector0, gst=GST, receivers=Receivers}) ->
+    %lager:info("Received a remote read. Key ~p, Sender ~p, TS ~p, Client ~p",[BKey, Sender, Clock, Client]),
+    %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
             Connector1 = handle_operation(remote_read, {BKey, Sender, Client}, Connector0, GST, Receivers),
             {noreply, S0#state{connector=Connector1}};
         false ->
-            PendingOps1 = orddict:append(Clock, {remote_read, {BKey, Sender, Client}}, PendingOps0),
-            {noreply, S0#state{pops=PendingOps1}}
+            ets:insert(PendingOps, {{Clock, Sender, {remote_read, {BKey, Sender, Client}}}, in}),
+            {noreply, S0}
     end;
 
-handle_command({remote_reply, Value, Client, Clock}, _From, S0=#state{pops=PendingOps0, connector=Connector0, gst=GST, receivers=Receivers}) ->
-    lager:info("Received a remote reply. Value ~p, Client ~p, Clock ~p",[Value, Client, Clock]),
-    lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
+handle_command({remote_reply, Value, Client, Clock}, _From, S0=#state{pops=PendingOps, connector=Connector0, gst=GST, receivers=Receivers}) ->
+    %lager:info("Received a remote reply. Value ~p, Client ~p, Clock ~p",[Value, Client, Clock]),
+    %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
             Connector1 = handle_operation(remote_reply, {Value, Client, Clock}, Connector0, GST, Receivers),
             {noreply, S0#state{connector=Connector1}};
         false ->
-            PendingOps1 = orddict:append(Clock, {remote_reply, {Value, Client, Clock}}, PendingOps0),
-            {noreply, S0#state{pops=PendingOps1}}
+            ets:insert(PendingOps, {{Clock, Client, {remote_reply, {Value, Client, Clock}}}, in}),
+            {noreply, S0}
     end;
 
 handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_remote=VVRemote0, myid=MyId, receivers=Receivers}) ->
@@ -305,19 +307,19 @@ handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
-handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=PendingOps0, receivers=Receivers}) ->
+handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=PendingOps, receivers=Receivers}) ->
     VV_LST1 = dict:store(Partition, Clock, VV_LST0),
     GST = compute_gst(VV_LST1),
-    {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0, Receivers),                    
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, pops=PendingOps1, connector=Connector1}};
+    Connector1 = flush_pending_operations(PendingOps, GST, Connector0, Receivers),                    
+    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1}};
 
-handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps0, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers}) ->
+handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers}) ->
     LST = lists:foldl(fun(Id, Min) ->
                         min(dict:fetch(Id, VV), Min)
                      end, infinity, dict:fetch_keys(VV)),
     VV_LST1=dict:store(Partition, LST, VV_LST0),
     GST = compute_gst(VV_LST1),
-    {PendingOps1, Connector1} = flush_pending_operations(PendingOps0, GST, Connector0, Receivers),                    
+    Connector1 = flush_pending_operations(PendingOps, GST, Connector0, Receivers),                    
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     lists:foreach(fun(PrefList) ->
@@ -329,7 +331,7 @@ handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=
                     end
                   end, GrossPrefLists),
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, pops=PendingOps1, connector=Connector1}};
+    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -376,19 +378,16 @@ compute_gst(VV_LST) ->
                         min(Min, dict:fetch(Entry, VV_LST))
                        end, infinity, dict:fetch_keys(VV_LST)).
 
-flush_pending_operations([], _GST, Connector0, _Receivers) ->
-    {[], Connector0};
-
-flush_pending_operations([Next|Rest]=PendingOps0, GST, Connector0, Receivers) ->
-    {TimeStamp, List} = Next,
-    case TimeStamp =< GST of
-        true ->
-            Connector1 = lists:foldl(fun({Type, Payload}, Acc) ->
-                                        handle_operation(Type, Payload, Acc, GST, Receivers)
-                                     end, Connector0, List),
-            flush_pending_operations(Rest, GST, Connector1, Receivers);
-        false ->
-            {PendingOps0, Connector0}
+flush_pending_operations(PendingOps, GST, Connector0, Receivers) ->
+     case ets:first(PendingOps) of
+        '$end_of_table' ->
+            Connector0;
+        {TimeStamp, _Sender, {Type, Payload}}=Key when TimeStamp =< GST ->
+            Connector1 = handle_operation(Type, Payload, Connector0, GST, Receivers),
+            true = ets:delete(PendingOps, Key),
+            flush_pending_operations(PendingOps, GST, Connector1, Receivers);
+        _Key ->
+            Connector0
     end.
 
 handle_operation(Type, Payload, Connector0, GST, Receivers) ->
