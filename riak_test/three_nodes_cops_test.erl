@@ -50,6 +50,8 @@ confirm() ->
     {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
     %% Starting leaf3
     {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
+    
+    timer:sleep(1000),
         
     ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1]),

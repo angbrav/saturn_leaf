@@ -112,77 +112,80 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
     end.
 
 init([Partition]) ->
+    Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(ops_cops)),
+    Ops = ets:new(Name1, [set, named_table]),
+    Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(values_cops)),
+    Values = ets:new(Name2, [set, named_table]),
     {ok, #state{partition=Partition,
-                ops=dict:new(),
-                values=dict:new() 
+                ops=Ops,
+                values=Values 
                }}.
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({remote_read, Id, Label}, _From, S0) ->
+handle_command({remote_read, Id, Label}, _From, S0=#state{ops=Ops, values=Values}) ->
     Payload = Label#label.payload,
     Deps = Payload#payload_remote.deps,
     case Deps of
         [] ->
-            S1 = handle_pending_op(Id, Label, S0);
+            ok = handle_pending_op(Id, Label, Values);
         _ ->
             Split = scatter_deps(Deps),
-            S1 = send_checking_messages(Split, Id, Label, S0)
+            ok = send_checking_messages(Split, Id, Label, Ops)
     end,
-    {noreply, S1};
+    {noreply, S0};
 
-handle_command({remote_reply, Id, Label}, _From, S0) ->
+handle_command({remote_reply, Id, Label}, _From, S0=#state{ops=Ops, values=Values}) ->
     Payload = Label#label.payload,
     Deps = Payload#payload_reply.deps,
     case Deps of
         [] ->
-            S1 = handle_pending_op(Id, Label, S0);
+            ok = handle_pending_op(Id, Label, Values);
         _ ->
             Split = scatter_deps(Deps),
-            S1 = send_checking_messages(Split, Id, Label, S0)
+            ok = send_checking_messages(Split, Id, Label, Ops)
     end,
-    {noreply, S1};
+    {noreply, S0};
 
-handle_command({update, Id, Label, Value}, _From, S0=#state{values=Values0}) ->
+handle_command({update, Id, Label, Value}, _From, S0=#state{ops=Ops, values=Values}) ->
     Deps = Label#label.payload,
-    Values1 = dict:store(Id, Value, Values0),
+    true = ets:insert(Values, {Id, Value}),
     case Deps of
         [] ->
-            S1 = handle_pending_op(Id, Label, S0#state{values=Values1});
+            ok = handle_pending_op(Id, Label, Values);
         _ ->
             Split = scatter_deps(Deps),
-            S1 = send_checking_messages(Split, Id, Label, S0#state{values=Values1})
+            ok = send_checking_messages(Split, Id, Label, Ops)
     end,
-    {noreply, S1};
+    {noreply, S0};
 
-handle_command({remote_update, Id, Label, Value}, _From, S0=#state{values=Values0}) ->
+handle_command({remote_update, Id, Label, Value}, _From, S0=#state{ops=Ops, values=Values}) ->
     Payload = Label#label.payload,
     Deps = Payload#payload_remote_update.deps,
-    Values1 = dict:store(Id, Value, Values0),
+    true = ets:insert(Values, {Id, Value}),
     case Deps of
         [] ->
-            S1 = handle_pending_op(Id, Label, S0#state{values=Values1});
+            ok = handle_pending_op(Id, Label, Values);
         _ ->
             Split = scatter_deps(Deps),
-            S1 = send_checking_messages(Split, Id, Label, S0#state{values=Values1})
+            ok = send_checking_messages(Split, Id, Label, Ops)
     end,
-    {noreply, S1};
+    {noreply, S0};
 
-handle_command({deps_checked, Id}, _From, S0=#state{ops=Ops0}) ->
-    case dict:find(Id, Ops0) of
-        {ok, {Rest, Label}} ->
+handle_command({deps_checked, Id}, _From, S0=#state{ops=Ops, values=Values}) ->
+    case ets:lookup(Ops, Id) of
+        [] ->
+            lager:error("deps_checked received for id: ~p, but no pending with such an id", [Id]),
+            {noreply, S0};
+        [{Id, {Rest, Label}}] ->
             case Rest of
                 1 ->
-                    Ops1 = dict:erase(Id, Ops0),
-                    S1=handle_pending_op(Id, Label, S0#state{ops=Ops1});
+                    true = ets:delete(Ops, Id),
+                    ok = handle_pending_op(Id, Label, Values);
                 _ ->
-                    Ops1 = dict:store(Id, {Rest - 1, Label}, Ops0),
-                    S1=S0#state{ops=Ops1}
+                    true = ets:insert(Ops, {Id, {Rest - 1, Label}})
             end,
-            {noreply, S1};
-        error ->
-            lager:error("deps_checked received for id: ~p, but no pending with such an id", [Id]),
             {noreply, S0}
     end;
     
@@ -223,7 +226,7 @@ handle_exit(_Pid, _Reason, State) ->
 terminate(_Reason, _State) ->
     ok.
 
-handle_pending_op(Id, Label, S0=#state{values=Values0}) ->
+handle_pending_op(Id, Label, Values) ->
     %lager:info("Label: ~p", [Label]),
     BKey = Label#label.bkey,
     DocIdx = riak_core_util:chash_key(BKey),
@@ -231,41 +234,41 @@ handle_pending_op(Id, Label, S0=#state{values=Values0}) ->
     [{IndexNode, _Type}] = PrefList,
     case Label#label.operation of
         update ->
-            case dict:find(Id, Values0) of
-                {ok, Value} ->
-                    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, {Label#label.timestamp, Label#label.payload}),
-                    Values1 = dict:erase(Id, Values0),
-                    S0#state{values=Values1};
-                error ->
+            case ets:lookup(Values, Id) of
+                [] ->
                     lager:error("deps_checked received for id: ~p, but no pending value with such an id", [Id]),
-                    S0
+                    {error, no_value};
+                [{Id, Value}] ->
+                    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, {Label#label.timestamp, Label#label.payload}),
+                    true = ets:delete(Values, Id),
+                    ok
             end;
         remote_read ->
                 saturn_proxy_vnode:remote_read(IndexNode, Label),
-                S0;
+                ok;
         remote_reply ->
                 Payload = Label#label.payload,
                 Client = Payload#payload_reply.client,
                 Value = Payload#payload_reply.value,
                 Deps = Payload#payload_reply.deps,
                 riak_core_vnode:reply(Client, {ok, {Value, Deps}}),
-                S0;
+                ok;
         remote_update ->
-                case dict:find(Id, Values0) of
-                {ok, Value} ->
+                case ets:lookup(Values, Id) of
+                [] ->
+                    lager:error("deps_checked received for id: ~p, but no pending value with such an id", [Id]),
+                    {error, no_value};
+                [{Id, Value}] ->
                     Payload = Label#label.payload,
                     Client = Payload#payload_remote_update.client,
                     Deps = Payload#payload_remote_update.deps,
                     saturn_proxy_vnode:remote_update(IndexNode, BKey, Value, Deps, Client),
-                    Values1 = dict:erase(Id, Values0),
-                    S0#state{values=Values1};
-                error ->
-                    lager:error("deps_checked received for id: ~p, but no pending value with such an id", [Id]),
-                    S0
+                    true = ets:delete(Values, Id),
+                    ok
             end;
         _ ->
                 lager:error("Unknown operation: ~p", [Label#label.operation]),
-                S0
+                {error, unknown_operation}
     end.
 
 scatter_deps(Deps) ->
@@ -276,12 +279,11 @@ scatter_deps(Deps) ->
                     dict:append(IndexNode, Dependency, Acc)
                 end, dict:new(), Deps).
 
-send_checking_messages(Split, Id, Label, S0=#state{ops=Ops0}) ->
+send_checking_messages(Split, Id, Label, Ops) ->
     Nodes = dict:fetch_keys(Split),
     lists:foreach(fun(IndexNode) ->
                     List = dict:fetch(IndexNode, Split),
                     saturn_proxy_vnode:check_deps(IndexNode, Id, List)
                   end, Nodes),
-    Ops1 = dict:store(Id, {length(Nodes), Label}, Ops0),
-    S0#state{ops=Ops1}.
-    
+    true = ets:insert(Ops, {Id, {length(Nodes), Label}}),
+    ok.

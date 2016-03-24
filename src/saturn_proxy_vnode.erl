@@ -122,12 +122,16 @@ set_receivers(Node, Receivers) ->
 
 init([Partition]) ->
     lager:info("Vnode init"),
+    Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
+    KeyDeps = ets:new(Name1, [set, named_table]),
+    Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
+    RestDeps = ets:new(Name2, [set, named_table]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     {ok, #state{partition=Partition,
                 last_label=none,
-                key_deps=dict:new(),
+                key_deps=KeyDeps,
                 max_ts=0,
-                rest_deps=dict:new(),
+                rest_deps=RestDeps,
                 connector=Connector
                }}.
 
@@ -162,27 +166,28 @@ handle_command({check_myid_ready}, _Sender, S0) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=Deps0, rest_deps=Rest0}) ->
-    {R, Deps1} = lists:foldl(fun({BKey, Version}, {Total, Dict}=Acc) ->
-                                case groups_manager_serv:do_replicate(BKey) of
+handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=KeyDeps, rest_deps=Rest}) ->
+    R = lists:foldl(fun({BKey, Version}, Total) ->
+                        case groups_manager_serv:do_replicate(BKey) of
+                            true ->
+                                {ok, {_Value, {VerRead, _D}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+                                case Version =< VerRead of
                                     true ->
-                                        {ok, {_Value, {VerRead, _D}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-                                        case Version =< VerRead of
-                                            true ->
-                                                Acc;
-                                            false ->
-                                                case dict:find(BKey, Dict) of
-                                                    {ok, Orddict0} ->
-                                                        Orddict1 = orddict:append(Version, Id, Orddict0);
-                                                    error ->
-                                                        Orddict1 = orddict:append(Version, Id, orddict:new())
-                                                end,
-                                                {Total + 1, dict:store(BKey, Orddict1, Dict)}
-                                                end;
+                                        Total;
                                     false ->
-                                        Acc
-                                end
-                              end, {0, Deps0}, Deps),
+                                        case ets:lookup(KeyDeps, BKey) of
+                                            [] ->
+                                                Orddict1 = orddict:append(Version, Id, orddict:new());
+                                            [{BKey, Orddict0}] ->
+                                                Orddict1 = orddict:append(Version, Id, Orddict0)
+                                        end,
+                                        true = ets:insert(KeyDeps, {BKey, Orddict1}),
+                                        Total + 1
+                                end;
+                            false ->
+                                Total
+                        end
+                    end, 0, Deps),
     case R of
         0 ->
             DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
@@ -191,8 +196,8 @@ handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key
             saturn_cops_vnode:deps_checked(IndexNode, Id),
             {noreply, S0};
         _ ->
-            Rest1 = dict:store(Id, R, Rest0),
-            {noreply, S0#state{key_deps=Deps1, rest_deps=Rest1}}
+            true = ets:insert(Rest, {Id, R}),
+            {noreply, S0}
     end; 
 
 handle_command({read, BKey, Deps}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers}) ->
@@ -211,11 +216,11 @@ handle_command({read, BKey, Deps}, From, S0=#state{connector=Connector, myid=MyI
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers}) ->
+handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0}) ->
     case groups_manager_serv:get_closest_dcid(BKey) of
         {ok, MyId} ->
-            {Version, S1} = do_put(BKey, Value, Deps, S0),
-            {reply, {ok, Version}, S1};
+            {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers),
+            {reply, {ok, Version}, S0#state{connector=Connector1}};
         {ok, Id} ->
             Label = create_label(remote_update, BKey, none, {Partition, node()}, MyId, #payload_remote_update{deps=Deps, client=From}),
             Receiver = dict:fetch(Id, Receivers),
@@ -229,23 +234,24 @@ handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition,
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
-handle_command({remote_update, BKey, Value, Deps, Client}, _From, S0) ->
-    {Version, S1} = do_put(BKey, Value, Deps, S0),
+handle_command({remote_update, BKey, Value, Deps, Client}, _From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0}) ->
+    {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers),
     riak_core_vnode:reply(Client, {ok, Version}),
-    {noreply, S1};
+    {noreply, S0#state{connector=Connector1}};
 
-handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps0}) ->
+handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps, rest_deps=RestDeps}) ->
+    %lager:info("Received remote update: ~p", [{BKey, Value}]),
     {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
     case OldVersion =< TimeStamp of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {TimeStamp, Deps}}),
-            S1 = case dict:find(BKey, KeyDeps0) of
-                    {ok, Orddict0} ->
-                        handle_pending_deps(Orddict0, BKey, TimeStamp, S0#state{connector=Connector1});
-                    error ->
-                        S0#state{connector=Connector1}
-                end,
-            {noreply, S1};
+            case ets:lookup(KeyDeps, BKey) of
+                [] ->
+                    noop;
+                [{BKey, Orddict0}] ->
+                    handle_pending_deps(Orddict0, BKey, TimeStamp, KeyDeps, RestDeps)
+            end,
+            {noreply, S0#state{connector=Connector1}};
         false ->
             {noreply, S0}
     end;
@@ -327,39 +333,39 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            payload=Payload
            }.
 
-handle_pending_deps([], BKey, _Version, S0=#state{key_deps=KeyDeps0}) ->
-    S0#state{key_deps=dict:erase(BKey, KeyDeps0)};
+handle_pending_deps([], BKey, _Version, KeyDeps, _RestDeps) ->
+    true = ets:delete(KeyDeps, BKey);
 
-handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, S0=#state{rest_deps=Rest0, key_deps=KeyDeps0}) ->
+handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, KeyDeps, RestDeps) ->
     case PVersion =< Version of
         true ->
-            Rest1 = lists:foldl(fun(Id, Acc) ->
-                                    case dict:fetch(Id, Acc) of
-                                        1 ->
-                                            DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
-                                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
-                                            [{IndexNode, _Type}] = PrefList,
-                                            saturn_cops_vnode:deps_checked(IndexNode, Id),
-                                            dict:erase(Id, Acc);
-                                        Left ->
-                                            dict:store(Id, Left-1, Acc)
-                                    end
-                                end, Rest0, Ids),
-            handle_pending_deps(Rest, BKey, Version, S0#state{rest_deps=Rest1});
+            lists:foreach(fun(Id, Acc) ->
+                            case dict:fetch(Id, Acc) of
+                                1 ->
+                                    DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
+                                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
+                                    [{IndexNode, _Type}] = PrefList,
+                                    saturn_cops_vnode:deps_checked(IndexNode, Id),
+                                    true = ets:delete(RestDeps, Id);
+                                Left ->
+                                    true = ets:insert(RestDeps, {Id, Left-1})
+                            end
+                          end, Ids),
+            handle_pending_deps(Rest, BKey, Version, KeyDeps, RestDeps);
         false ->
-            S0#state{key_deps=dict:store(BKey, Orddict, KeyDeps0)}
+            true = ets:insert(KeyDeps, {BKey, Orddict})
     end.
 
-do_put(BKey, Value, Deps, S0=#state{partition=Partition, myid=MyId, connector=Connector0, key_deps=KeyDeps0, receivers=Receivers}) ->
+do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers) ->
     {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
     Version = OldVersion + 1,
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {Version, Deps}}),
-    S1 = case dict:find(BKey, KeyDeps0) of
-            {ok, Orddict0} ->
-                handle_pending_deps(Orddict0, BKey, Version, S0#state{connector=Connector1});
-            error ->
-                S0#state{connector=Connector1}
-         end,
+    case ets:lookup(KeyDeps, BKey) of
+        [] ->
+            noop;
+        [{BKey, Orddict0}] ->
+            handle_pending_deps(Orddict0, BKey, Version, KeyDeps, RestDeps)
+    end,
     Label = create_label(update, BKey, Version, {Partition, node()}, MyId, Deps),
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
@@ -370,4 +376,4 @@ do_put(BKey, Value, Deps, S0=#state{partition=Partition, myid=MyId, connector=Co
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
     end,
-    {Version, S1}.
+    {Version, Connector1}.
