@@ -43,7 +43,7 @@ start_leaf(Port, MyId) ->
     {Ip, _, _} = hd(List),
     Host = inet_parse:ntoa(Ip),
 
-    riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
+    %riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
 
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
                     {saturn_leaf_converger, start_link, [MyId]},

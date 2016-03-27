@@ -49,13 +49,13 @@ confirm() ->
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
 
+    rt:wait_for_service(Node1, saturn_proxy),
+
     %% Starting servers in one node (Node1)
     {ok, _HostPort}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040, 0]),
 
-    lager:info("Waiting until vnodes are started up"),
-    rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
-    lager:info("Vnodes are started up"),
-
+    ok=rpc:call(Node1, saturn_leaf_producer, check_ready, [0]),
+    
     read_updates_different_nodes(Cluster1),
     converger_no_interleaving(Cluster1),
     converger_interleaving(Cluster1),
