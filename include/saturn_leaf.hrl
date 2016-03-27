@@ -5,7 +5,7 @@
 -define(SIMPLE_MASTER, saturn_simple_backend_vnode_master).
 -define(SIMPLE_SERVICE, saturn_simple_backend).
 
--define(GROUPSFILE, "data/manager/groups_file_simple.saturn").
+-define(GROUPSFILE, "data/manager/groups_facebook.saturn").
 -define(TREEFILE, "data/manager/tree_file_simple.saturn").
 -define(TREEFILE_TEST, "../include/tree_file_test.saturn").
 -define(GROUPSFILE_TEST, "../include/groups_file_test.saturn").
