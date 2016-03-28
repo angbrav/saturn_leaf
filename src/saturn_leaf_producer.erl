@@ -66,7 +66,8 @@ init([MyId]) ->
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
     Labels = ets:new(labels_producer, [ordered_set, named_table]),
-    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=0, stable_time=0, pending=false}}.
+    {ok, Delay} = groups_manager_serv:get_delay_leaf(),
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false}}.
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=Pending0, stable_time=StableTime0, labels=Labels, myid=MyId}) ->
     VClock1 = dict:store(Partition, Clock, VClock0),
@@ -157,7 +158,7 @@ propagate_stream(FinalStream, MyId) ->
         naive_erlang ->
             case groups_manager_serv:filter_stream_leaf_id(FinalStream) of
                 {ok, [], _} ->
-                    lager:info("Nothing to send"),
+                    %lager:info("Nothing to send"),
                     noop;
                 {ok, _, no_indexnode} ->
                     noop;
