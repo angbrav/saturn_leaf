@@ -167,7 +167,6 @@ propagate_stream(FinalStream, MyId) ->
         short_tcp ->
             case groups_manager_serv:filter_stream_leaf(FinalStream) of
                 {ok, [], _} ->
-                    lager:info("Nothing to send"),
                     noop;
                 {ok, _, no_indexnode} ->
                     noop;
