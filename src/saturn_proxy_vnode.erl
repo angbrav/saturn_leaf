@@ -49,6 +49,7 @@
          init_proxy/2,
          remote_read/2,
          last_label/1,
+         restart/1,
          check_ready/1]).
 
 -record(state, {partition,
@@ -74,6 +75,12 @@ init_proxy(Node, MyId) ->
     riak_core_vnode_master:sync_command(Node,
                                         {init_proxy, MyId},
                                         ?PROXY_MASTER).
+
+restart(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        restart,
+                                        ?PROXY_MASTER).
+    
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, BKey, Clock},
@@ -103,11 +110,15 @@ remote_read(Node, Label) ->
 init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
-    {ok, #state{partition=Partition,
-                max_ts=0,
-                last_label=none,
-                connector=Connector
-               }}.
+    {ok, initialize_state(Partition, Connector)}.
+
+
+initialize_state(Partition, Connector) ->
+    #state{partition=Partition,
+           max_ts=0,
+           last_label=none,
+           connector=Connector
+          }.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -135,6 +146,10 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
+
+handle_command(restart, _Sender, _S0=#state{connector=Connector0, partition=Partition}) ->
+    Connector1 = ?BACKEND_CONNECTOR:clean(Connector0),
+    {reply, ok, initialize_state(Partition, Connector1)};
 
 handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),

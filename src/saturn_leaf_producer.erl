@@ -33,6 +33,7 @@
          code_change/3, terminate/2]).
 -export([partition_heartbeat/3,
          check_ready/1,
+         restart/1,
          new_label/4]).
 
 -record(state, {vclock :: dict(),
@@ -56,6 +57,9 @@ new_label(MyId, Label, Partition, IsUpdate) ->
 check_ready(MyId) ->
     gen_server:call({global, reg_name(MyId)}, check_ready, infinity).
 
+restart(MyId) ->
+    gen_server:call({global, reg_name(MyId)}, restart, infinity).
+
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
@@ -68,6 +72,7 @@ init([MyId]) ->
     Labels = ets:new(labels_producer, [ordered_set, named_table]),
     {ok, Delay} = groups_manager_serv:get_delay_leaf(),
     {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false}}.
+
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=Pending0, stable_time=StableTime0, labels=Labels, myid=MyId}) ->
     VClock1 = dict:store(Partition, Clock, VClock0),
@@ -102,6 +107,14 @@ handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vc
 
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_call(restart, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
+    true = ets:delete(Labels0),
+    Labels1 = ets:new(labels_producer, [ordered_set, named_table]),
+    VClock1 = lists:foldl(fun({Partition, _}, Acc) ->
+                            dict:store(Partition, 0, Acc)
+                          end, dict:new(), dict:to_list(VClock0)),
+    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false}};
 
 handle_call(check_ready, _From, S0) ->
     {reply, ok, S0};
