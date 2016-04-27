@@ -102,9 +102,10 @@ propagate(Node, BKey, Value, TimeStamp) ->
                                         ?PROXY_MASTER).
 
 remote_read(Node, Label) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {remote_read, Label},
-                                        ?PROXY_MASTER).
+    riak_core_vnode_master:command(Node,
+                                   {remote_read, Label},
+                                   {fsm, undefines, self()},
+                                   ?PROXY_MASTER).
 
 
 init([Partition]) ->
@@ -213,7 +214,7 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Source = Label#label.sender,
     NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
-    {reply, ok, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
+    {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
 handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),

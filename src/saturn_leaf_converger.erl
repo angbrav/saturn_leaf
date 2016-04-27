@@ -107,7 +107,7 @@ execute_operation(Label, Value) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
+    ok = saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
 
 flush_list([], _Ops, _MyId) ->
     {queue:new(), 0};
