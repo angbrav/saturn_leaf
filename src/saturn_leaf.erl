@@ -6,6 +6,7 @@
          ping/0,
          update/3,
          read/2,
+         clean/1,
          spawn_wrapper/4
         ]).
 
@@ -29,6 +30,15 @@ read({Bucket, Key}, Clock) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:read(IndexNode, {Bucket, Key}, Clock).
+
+clean(MyId) ->
+    ok = saturn_leaf_producer:restart(MyId), 
+    ok = saturn_leaf_converger:restart(MyId), 
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:restart(hd(PrefList))
+                  end, GrossPrefLists).
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),

@@ -49,6 +49,7 @@
          init_proxy/2,
          remote_read/2,
          last_label/1,
+         restart/1,
          check_ready/1]).
 
 -record(state, {partition,
@@ -74,6 +75,12 @@ init_proxy(Node, MyId) ->
     riak_core_vnode_master:sync_command(Node,
                                         {init_proxy, MyId},
                                         ?PROXY_MASTER).
+
+restart(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        restart,
+                                        ?PROXY_MASTER).
+    
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, BKey, Clock},
@@ -95,19 +102,24 @@ propagate(Node, BKey, Value, TimeStamp) ->
                                         ?PROXY_MASTER).
 
 remote_read(Node, Label) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {remote_read, Label},
-                                        ?PROXY_MASTER).
+    riak_core_vnode_master:command(Node,
+                                   {remote_read, Label},
+                                   {fsm, undefines, self()},
+                                   ?PROXY_MASTER).
 
 
 init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
-    {ok, #state{partition=Partition,
-                max_ts=0,
-                last_label=none,
-                connector=Connector
-               }}.
+    {ok, initialize_state(Partition, Connector)}.
+
+
+initialize_state(Partition, Connector) ->
+    #state{partition=Partition,
+           max_ts=0,
+           last_label=none,
+           connector=Connector
+          }.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -135,6 +147,10 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
+
+handle_command(restart, _Sender, _S0=#state{connector=Connector0, partition=Partition}) ->
+    Connector1 = ?BACKEND_CONNECTOR:clean(Connector0),
+    {reply, ok, initialize_state(Partition, Connector1)};
 
 handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),
@@ -198,7 +214,7 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Source = Label#label.sender,
     NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
-    {reply, ok, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
+    {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
 handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
