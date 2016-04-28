@@ -126,15 +126,10 @@ remote_read(Node, Label) ->
 init([Partition]) ->
     lager:info("Vnode init"),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
-    {ok, initialize_state(Partition, Connector)}.
-
-
-initialize_state(Partition, Connector) ->
-    #state{partition=Partition,
-           max_ts=0,
-           last_label=none,
-           connector=Connector
-          }.
+    {ok, #state{partition=Partition,
+                max_ts=0,
+                last_label=none,
+                connector=Connector}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -163,9 +158,11 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command(restart, _Sender, _S0=#state{connector=Connector0, partition=Partition}) ->
-    Connector1 = ?BACKEND_CONNECTOR:clean(Connector0),
-    {reply, ok, initialize_state(Partition, Connector1)};
+handle_command(restart, _Sender, S0=#state{connector=Connector0, partition=Partition}) ->
+    Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
+    {reply, ok, S0#state{max_ts=0,
+                         last_label=none,
+                         connector=Connector1}};
 
 handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),

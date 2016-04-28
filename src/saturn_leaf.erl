@@ -52,7 +52,8 @@ clean(MyId) ->
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     lists:foreach(fun(PrefList) ->
                     ok = saturn_proxy_vnode:restart(hd(PrefList))
-                  end, GrossPrefLists).
+                  end, GrossPrefLists),
+    ok.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),
