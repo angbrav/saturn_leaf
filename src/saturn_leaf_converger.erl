@@ -156,7 +156,12 @@ handle_label(Label, Ops, MyId) ->
                 true ->
                     Client = Payload#payload_reply.client,
                     Value = Payload#payload_reply.value,
-                    riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                    case Payload#payload_reply.type_call of
+                        sync ->
+                            riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                        async ->
+                            gen_server:reply(Client, {ok, {Value, 0}})
+                    end;
                 false ->
                     noop
             end,
@@ -168,7 +173,7 @@ handle_label(Label, Ops, MyId) ->
                     true = ets:delete(Ops, Label),
                     true;
                 [] ->
-                    lager:info("Operation not received for label: ~p", [Label]),
+                    %lager:info("Operation not received for label: ~p", [Label]),
                     false
             end
     end.

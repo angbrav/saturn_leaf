@@ -43,7 +43,9 @@
          handle_exit/3]).
 
 -export([read/3,
+         async_read/4,
          update/4,
+         async_update/5,
          propagate/4,
          heartbeat/1,
          init_proxy/2,
@@ -85,6 +87,13 @@ read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {read, BKey, Clock},
                                         ?PROXY_MASTER).
+
+async_read(Node, BKey, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_read, BKey, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
 heartbeat(Node) ->
     riak_core_vnode_master:command(Node,
                                    heartbeat,
@@ -95,6 +104,12 @@ update(Node, BKey, Value, Clock) ->
     riak_core_vnode_master:sync_command(Node,
                                         {update, BKey, Value, Clock},
                                         ?PROXY_MASTER).
+
+async_update(Node, BKey, Value, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_update, BKey, Value, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
 
 propagate(Node, BKey, Value, TimeStamp) ->
     riak_core_vnode_master:sync_command(Node,
@@ -156,48 +171,36 @@ handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),
     {reply, ok, S0#state{myid=MyId}};
 
-handle_command({read, BKey, Clock}, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
-    case groups_manager_serv:do_replicate(BKey) of
-        true ->    
-            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-            {reply, {ok, Value}, S0};
-        false ->
-            %Remote read
-            PhysicalClock = saturn_utilities:now_microsec(),
-            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            {ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From}),
-            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
-            {noreply, S0#state{max_ts=TimeStamp, last_label=Label}};
+handle_command({read, BKey, Clock}, From, S0) ->
+    case do_read(sync, BKey, Clock, From, S0) of
         {error, Reason} ->
-            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
-            {reply, {error, Reason}, S0}
+            {reply, {error, Reason}, S0};
+        {ok, Value} ->
+            {reply, {ok, Value}, S0};
+        {remote, S1} ->
+            {noreply, S1}
     end;
 
-handle_command({update, BKey, Value, Clock}, _From, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0}) ->
-    PhysicalClock = saturn_utilities:now_microsec(),
-    TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
-    S1 = case groups_manager_serv:do_replicate(BKey) of
-        true ->
-            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
-            S0#state{connector=Connector1};
-        false ->
-            S0;
-        {error, Reason1} ->
-            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
-            S0
-    end,
-    Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
-    saturn_leaf_producer:new_label(MyId, Label, Partition, true),
-    case groups_manager_serv:get_datanodes_ids(BKey) of
-        {ok, Group} ->
-            lists:foreach(fun(Id) ->
-                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
-                          end, Group);
-        {error, Reason2} ->
-            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-    end,
-    {reply, {ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}};
+handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
+    case do_read(async, BKey, Clock, Client, S0) of
+        {error, Reason} ->
+            gen_server:reply(Client, {error, Reason}),
+            {noreply, S0};
+        {ok, Value} ->
+            gen_server:reply(Client, {ok, Value}),
+            {noreply, S0};
+        {remote, S1} ->
+            {noreply, S1}
+    end;
+
+handle_command({update, BKey, Value, Clock}, _From, S0) ->
+    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    {reply, {ok, TimeStamp}, S1};
+
+handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
+    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    gen_server:reply(Client, {ok, TimeStamp}),
+    {noreply, S1};
 
 handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
@@ -211,8 +214,9 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Payload = Label#label.payload,
     Bucket = Payload#payload_remote.bucket_source,
     Client = Payload#payload_remote.client,
+    Type = Payload#payload_remote.type_call,
     Source = Label#label.sender,
-    NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client}),
+    NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
@@ -270,3 +274,45 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            sender=Id,
            payload=Payload
            }.
+
+do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
+    case groups_manager_serv:do_replicate(BKey) of
+        true ->    
+            ?BACKEND_CONNECTOR:read(Connector, {BKey});
+        false ->
+            %Remote read
+            PhysicalClock = saturn_utilities:now_microsec(),
+            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
+            {ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
+            {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
+        {error, Reason} ->
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
+            {error, Reason}
+    end.
+    
+do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0}) ->
+    PhysicalClock = saturn_utilities:now_microsec(),
+    TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
+    S1 = case groups_manager_serv:do_replicate(BKey) of
+        true ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+            S0#state{connector=Connector1};
+        false ->
+            S0;
+        {error, Reason1} ->
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
+            S0
+    end,
+    Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
+    saturn_leaf_producer:new_label(MyId, Label, Partition, true),
+    case groups_manager_serv:get_datanodes_ids(BKey) of
+        {ok, Group} ->
+            lists:foreach(fun(Id) ->
+                            saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
+                          end, Group);
+        {error, Reason2} ->
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+    end,
+    {{ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}}.
