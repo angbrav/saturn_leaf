@@ -173,7 +173,7 @@ handle_label(Label, Ops, MyId) ->
                     true = ets:delete(Ops, Label),
                     true;
                 [] ->
-                    lager:info("Operation not received for label: ~p", [Label]),
+                    %lager:info("Operation not received for label: ~p", [Label]),
                     false
             end
     end.

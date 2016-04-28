@@ -107,7 +107,7 @@ update(Node, BKey, Value, Clock) ->
 
 async_update(Node, BKey, Value, Clock, Client) ->
     riak_core_vnode_master:command(Node,
-                                   {update, BKey, Value, Clock, Client},
+                                   {async_update, BKey, Value, Clock, Client},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 

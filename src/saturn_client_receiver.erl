@@ -28,33 +28,32 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([start_link/1]).
+-export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([handle/3]).
+-export([handle/2]).
 
--record(state, {myid}).
-               
-reg_name(MyId) -> list_to_atom(integer_to_list(MyId) ++ node() ++ atom_to_list(?MODULE)). 
+reg_name() -> list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)). 
 
-start_link(MyId) ->
-    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
+start_link() ->
+    gen_server:start({global, reg_name()}, ?MODULE, [], []).
 
-handle(MyId, read, [BKey, Clock]) ->
-    gen_server:call({global, reg_name(MyId)}, {read, BKey, Clock}, infinity);
+handle(read, [BKey, Clock]) ->
+    gen_server:call({global, reg_name()}, {read, BKey, Clock}, infinity);
 
-handle(MyId, update, [BKey, Value, Clock]) ->
-    gen_server:call({global, reg_name(MyId)}, {update, BKey, Value, Clock}, infinity).
+handle(update, [BKey, Value, Clock]) ->
+    gen_server:call({global, reg_name()}, {update, BKey, Value, Clock}, infinity).
 
-init([MyId]) ->
-    {ok, #state{myid=MyId}}.
+init([]) ->
+    lager:info("Client receiver started at ~p", [reg_name()]),
+    {ok, nostate}.
 
 handle_call({read, BKey, Clock}, From, S0) ->
     saturn_leaf:async_read(BKey, Clock, From),
     {noreply, S0};
 
 handle_call({update, BKey, Value, Clock}, From, S0) ->
-    saturn_leaf:async_read(BKey, Value, Clock, From),
+    saturn_leaf:async_update(BKey, Value, Clock, From),
     {noreply, S0}.
 
 handle_cast(_Info, State) ->

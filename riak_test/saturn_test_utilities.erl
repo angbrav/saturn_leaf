@@ -23,17 +23,37 @@
 
 -export([eventual_read/3, 
          eventual_read/4,
+         eventual_da_read/3, 
+         eventual_da_read/4,
          stop_datastore/1,
+         server_name/1,
          clean_datastore_data/1]).
 
 -include("saturn_leaf.hrl").
 -include("riak_backend_test.hrl").
+
+server_name(Node)->
+    {global, list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_client_receiver))}.
 
 eventual_read(Key, Node, ExpectedResult) ->
     eventual_read(Key, Node, ExpectedResult, 0).
 
 eventual_read(Key, Node, ExpectedResult, Clock) ->
     Result=rpc:call(Node, saturn_leaf, read, [Key, Clock]),
+    case Result of
+        {ok, {ExpectedResult, _Clock}} -> Result;
+        _ ->
+            lager:info("I read: ~p, expecting: ~p",[Result, ExpectedResult]),
+            timer:sleep(500),
+            eventual_read(Key, Node, ExpectedResult)
+    end.
+
+eventual_da_read(Key, Node, ExpectedResult) ->
+    eventual_da_read(Key, Node, ExpectedResult, 0).
+
+eventual_da_read(Key, Node, ExpectedResult, Clock) ->
+    Result=gen_server:call(server_name(Node), {read, Key, Clock}, infinity),
+    %Result=rpc:call(Node, saturn_leaf, read, [Key, Clock]),
     case Result of
         {ok, {ExpectedResult, _Clock}} -> Result;
         _ ->

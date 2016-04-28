@@ -79,7 +79,10 @@ init(_Args) ->
     PropagatorSup = {saturn_leaf_propagation_fsm_sup,
                     {saturn_leaf_propagation_fsm_sup, start_link, []},
                     permanent, 5000, supervisor, [saturn_leaf_propagation_fsm_sup]},
-    Childs0 = [ProxyMaster, PropagatorSup],
+    ClientReceiver = {saturn_client_receiver,
+                     {saturn_client_receiver, start_link, []},
+                     permanent, 5000, worker, [saturn_client_receiver]},
+    Childs0 = [ProxyMaster, PropagatorSup, ClientReceiver],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,
