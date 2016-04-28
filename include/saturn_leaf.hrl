@@ -39,10 +39,12 @@
 
 -record(payload_reply, {to :: all | non_neg_integer(),
                         client,
-                        value
+                        value,
+                        type_call
                        }).
 
 -record(payload_remote, {to :: all | non_neg_integer(),
                          bucket_source,
-                         client
+                         client,
+                         type_call
                         }).
