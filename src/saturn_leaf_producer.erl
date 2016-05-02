@@ -193,6 +193,20 @@ deliver_labels_new(Labels, StableTime, MyId, Deliverables0) ->
 
 propagate_stream(FinalStream, MyId) ->
     case ?PROPAGATION_MODE of
+        bypass_tree ->
+            Streams = lists:foldl(fun({BKey, Label}, Acc) ->
+                                    case groups_manager_serv:get_datanodes_ids(BKey) of
+                                        {ok, Group} ->
+                                            lists:foldl(fun(Id, AccIn) ->
+                                                            dict:append(Id, Label, AccIn)
+                                                        end, Acc, Group);
+                                        {error, Reason2} ->
+                                            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+                                    end
+                                  end, dict:new(), FinalStream),
+            lists:foreach(fun({Id, Stream}) ->
+                            saturn_leaf_converger:handle(Id, {new_stream, Stream, MyId})
+                          end, dict:to_list(Streams));
         naive_erlang ->
             case groups_manager_serv:filter_stream_leaf_id(FinalStream) of
                 {ok, [], _} ->
