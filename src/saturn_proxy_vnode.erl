@@ -190,15 +190,15 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             {noreply, S1}
     end;
 
-handle_command({update, _BKey, _Value, _Clock}, _From, S0) ->
+%handle_command({update, _BKey, _Value, _Clock}, _From, S0) ->
     %{{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
-    TimeStamp = 0,
-    S1=S0,
-    {reply, {ok, TimeStamp}, S1};
-
-%handle_command({update, BKey, Value, Clock}, _From, S0) ->
-    %{{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    %TimeStamp = 0,
+    %S1=S0,
     %{reply, {ok, TimeStamp}, S1};
+
+handle_command({update, BKey, Value, Clock}, _From, S0) ->
+    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    {reply, {ok, TimeStamp}, S1};
 
 handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
