@@ -70,9 +70,9 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, que
             {Labels1, QL1} = flush_list(Stream, Ops, MyId),
             {noreply, S0#state{labels_queue=Labels1, queue_len=QL1}}; 
         _ ->
-            {Labels1, Total} = lists:foldl(fun(Elem, Sum) ->
-                                            {queue:in(Elem, Labels0), Sum + 1}
-                                           end, 0, Stream),
+            {Labels1, Total} = lists:foldl(fun(Elem, {Queue, Sum}) ->
+                                            {queue:in(Elem, Queue), Sum + 1}
+                                           end, {Labels0, 0}, Stream),
             {noreply, S0#state{labels_queue=Labels1, queue_len=QL0+Total}}
     end;
 
