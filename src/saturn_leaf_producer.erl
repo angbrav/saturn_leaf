@@ -69,41 +69,45 @@ init([MyId]) ->
                         saturn_proxy_vnode:heartbeat(PrefList),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
-    Labels = ets:new(labels_producer, [ordered_set, named_table]),
+    Labels = ets:new(labels_producer, [ordered_set, named_table, private]),
+    erlang:send_after(10, self(), deliver),
     {ok, Delay} = groups_manager_serv:get_delay_leaf(),
     {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false}}.
 
 
-handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=Pending0, stable_time=StableTime0, labels=Labels, myid=MyId}) ->
+handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=_Pending0, stable_time=_StableTime0, labels=_Labels, myid=_MyId}) ->
     VClock1 = dict:store(Partition, Clock, VClock0),
-    StableTime1 = compute_stable(VClock1),
-    case (Pending0==false) and (StableTime1 > StableTime0) of
-        true ->
-            Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
-            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
-        false ->
-            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
-    end;
+    %StableTime1 = compute_stable(VClock1),
+    %case (Pending0==false) and (StableTime1 > StableTime0) of
+        %true ->
+            %Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
+            %{noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
+        %false ->
+            %{noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
+    %end;
+    {noreply, S0#state{vclock=VClock1}};
 
-handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=StableTime0, myid=MyId, pending=Pending0, delay=Delay}) ->
+handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=_StableTime0, myid=_MyId, pending=_Pending0, delay=_Delay}) ->
     TimeStamp = Label#label.timestamp,
-    case IsUpdate of
-        true ->
-            Now = saturn_utilities:now_microsec(),
-            Time = Now + Delay;
-        false ->
-            Time = 0
-    end,
+    Time=0,
+    %case IsUpdate of
+    %    true ->
+    %        Now = saturn_utilities:now_microsec(),
+    %        Time = Now + Delay;
+    %    false ->
+    %        Time = 0
+    %end,
     ets:insert(Labels, {{TimeStamp, Time, Partition, Label}, in}),
     VClock1 = dict:store(Partition, TimeStamp, VClock0),
-    StableTime1 = compute_stable(VClock1),
-    case (Pending0==false) and (StableTime1 > StableTime0) of
-        true ->
-            Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
-            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
-        false ->
-            {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
-    end;
+    %StableTime1 = compute_stable(VClock1),
+    %case (Pending0==false) and (StableTime1 > StableTime0) of
+    %    true ->
+    %        Pending1 = deliver_labels(Labels, StableTime1, MyId, []),
+    %        {noreply, S0#state{vclock=VClock1, stable_time=StableTime1, pending=Pending1}};
+    %    false ->
+    %        {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
+    %end;
+    {noreply, S0#state{vclock=VClock1}};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -126,6 +130,12 @@ handle_call(Info, From, State) ->
 handle_info(find_deliverables, S0=#state{stable_time=StableTime0, myid=MyId, labels=Labels}) ->
     Pending1 = deliver_labels(Labels, StableTime0, MyId, []),
     {noreply, S0#state{pending=Pending1}};
+
+handle_info(deliver, S0=#state{myid=MyId, labels=Labels, vclock=VClock0}) ->
+    StableTime1 = compute_stable(VClock0),
+    ok = deliver_labels_new(Labels, StableTime1, MyId, []),
+    erlang:send_after(1, self(), deliver),
+    {noreply, S0};
 
 handle_info(Info, State) ->
     lager:info("Weird message: ~p", [Info]),
@@ -164,6 +174,21 @@ deliver_labels(Labels, StableTime, MyId, Deliverables0) ->
         _Key ->
             propagate_stream(lists:reverse(Deliverables0), MyId),
             false
+    end.
+
+deliver_labels_new(Labels, StableTime, MyId, Deliverables0) ->
+    case ets:first(Labels) of
+        '$end_of_table' ->
+            propagate_stream(lists:reverse(Deliverables0), MyId),
+            ok;
+        {TimeStamp, _Time, _Partition, Label}=Key when TimeStamp =< StableTime ->
+            true = ets:delete(Labels, Key),
+            BKey = Label#label.bkey,
+            deliver_labels_new(Labels, StableTime, MyId, [{BKey, Label}|Deliverables0]),
+            ok;
+        _Key ->
+            propagate_stream(lists:reverse(Deliverables0), MyId),
+            ok
     end.
 
 propagate_stream(FinalStream, MyId) ->

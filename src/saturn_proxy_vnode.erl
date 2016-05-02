@@ -168,17 +168,6 @@ handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),
     {reply, ok, S0#state{myid=MyId}};
 
-%handle_command({read, _BKey, _Clock}, _From, S0) ->
-    %case do_read(sync, BKey, Clock, From, S0) of
-    %    {error, Reason} ->
-    %        {reply, {error, Reason}, S0};
-    %    {ok, Value} ->
-    %        {reply, {ok, Value}, S0};
-    %    {remote, S1} ->
-    %        {noreply, S1}
-    %end;
-    %{reply, {ok, {value, 0}}, S0};
-
 handle_command({read, BKey, Clock}, From, S0) ->
     case do_read(sync, BKey, Clock, From, S0) of
         {error, Reason} ->
@@ -208,8 +197,8 @@ handle_command({update, _BKey, _Value, _Clock}, _From, S0) ->
     {reply, {ok, TimeStamp}, S1};
 
 %handle_command({update, BKey, Value, Clock}, _From, S0) ->
-%    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
-%    {reply, {ok, TimeStamp}, S1};
+    %{{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    %{reply, {ok, TimeStamp}, S1};
 
 handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
@@ -289,7 +278,7 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            payload=Payload
            }.
 
-do_read(Type, BKey, Clock, From, _S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
+do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector}) ->
     case groups_manager_serv:do_replicate(BKey) of
         true ->    
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
@@ -298,10 +287,9 @@ do_read(Type, BKey, Clock, From, _S0=#state{myid=MyId, max_ts=MaxTS0, partition=
             PhysicalClock = saturn_utilities:now_microsec(),
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
             {ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
-            _Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
-            %saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
-            ?BACKEND_CONNECTOR:read(Connector, {BKey});
-            %{remote, S0#state{max_ts=TimeStamp, last_label=Label}};
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
+            {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
