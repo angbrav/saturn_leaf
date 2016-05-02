@@ -168,7 +168,7 @@ handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),
     {reply, ok, S0#state{myid=MyId}};
 
-handle_command({read, _BKey, _Clock}, _From, S0) ->
+%handle_command({read, _BKey, _Clock}, _From, S0) ->
     %case do_read(sync, BKey, Clock, From, S0) of
     %    {error, Reason} ->
     %        {reply, {error, Reason}, S0};
@@ -177,17 +177,17 @@ handle_command({read, _BKey, _Clock}, _From, S0) ->
     %    {remote, S1} ->
     %        {noreply, S1}
     %end;
-    {reply, {ok, {value, 0}}, S0};
+    %{reply, {ok, {value, 0}}, S0};
 
-%handle_command({read, BKey, Clock}, From, S0) ->
-    %case do_read(sync, BKey, Clock, From, S0) of
-    %    {error, Reason} ->
-    %        {reply, {error, Reason}, S0};
-    %    {ok, Value} ->
-    %        {reply, {ok, Value}, S0};
-    %    {remote, S1} ->
-    %        {noreply, S1}
-    %end;
+handle_command({read, BKey, Clock}, From, S0) ->
+    case do_read(sync, BKey, Clock, From, S0) of
+        {error, Reason} ->
+            {reply, {error, Reason}, S0};
+        {ok, Value} ->
+            {reply, {ok, Value}, S0};
+        {remote, S1} ->
+            {noreply, S1}
+    end;
 
 handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
     case do_read(async, BKey, Clock, Client, S0) of
