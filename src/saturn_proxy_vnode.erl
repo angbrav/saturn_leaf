@@ -289,7 +289,7 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            payload=Payload
            }.
 
-do_read(_Type, BKey, _Clock, _From, S0=#state{myid=_MyId, max_ts=_MaxTS0, partition=_Partition, connector=Connector}) ->
+do_read(_Type, BKey, _Clock, _From, _S0=#state{myid=_MyId, max_ts=_MaxTS0, partition=_Partition, connector=Connector}) ->
     case groups_manager_serv:do_replicate(BKey) of
         true ->    
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
