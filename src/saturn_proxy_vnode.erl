@@ -168,15 +168,26 @@ handle_command({init_proxy, MyId}, _From, S0) ->
     groups_manager_serv:set_myid(MyId),
     {reply, ok, S0#state{myid=MyId}};
 
-handle_command({read, BKey, Clock}, From, S0) ->
-    case do_read(sync, BKey, Clock, From, S0) of
-        {error, Reason} ->
-            {reply, {error, Reason}, S0};
-        {ok, Value} ->
-            {reply, {ok, Value}, S0};
-        {remote, S1} ->
-            {noreply, S1}
-    end;
+handle_command({read, _BKey, _Clock}, _From, S0) ->
+    %case do_read(sync, BKey, Clock, From, S0) of
+    %    {error, Reason} ->
+    %        {reply, {error, Reason}, S0};
+    %    {ok, Value} ->
+    %        {reply, {ok, Value}, S0};
+    %    {remote, S1} ->
+    %        {noreply, S1}
+    %end;
+    {reply, {ok, {value, 0}}, S0};
+
+%handle_command({read, BKey, Clock}, From, S0) ->
+    %case do_read(sync, BKey, Clock, From, S0) of
+    %    {error, Reason} ->
+    %        {reply, {error, Reason}, S0};
+    %    {ok, Value} ->
+    %        {reply, {ok, Value}, S0};
+    %    {remote, S1} ->
+    %        {noreply, S1}
+    %end;
 
 handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
     case do_read(async, BKey, Clock, Client, S0) of
@@ -190,9 +201,15 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             {noreply, S1}
     end;
 
-handle_command({update, BKey, Value, Clock}, _From, S0) ->
-    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+handle_command({update, _BKey, _Value, _Clock}, _From, S0) ->
+    %{{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+    TimeStamp = 0,
+    S1=S0,
     {reply, {ok, TimeStamp}, S1};
+
+%handle_command({update, BKey, Value, Clock}, _From, S0) ->
+%    {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
+%    {reply, {ok, TimeStamp}, S1};
 
 handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
