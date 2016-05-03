@@ -39,6 +39,7 @@
 -record(state, {vclock :: dict(),
                 delay,
                 stable_time,
+                manager,
                 pending,
                 labels :: list(),
                 myid}).
@@ -61,6 +62,14 @@ restart(MyId) ->
     gen_server:call({global, reg_name(MyId)}, restart, infinity).
 
 init([MyId]) ->
+    Name = integer_to_list(MyId) ++ "producergroups",
+    Groups = ets:new(list_to_atom(Name), [set, named_table, private]),
+    ok = groups_manager:new_groupsfile(?GROUPSFILE, Groups),
+    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(?TREEFILE),
+    Manager = #state_manager{tree=Tree,
+                             paths=Paths,
+                             nleaves=NLeaves,
+                             groups=Groups},
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     Dict = lists:foldl(fun(PrefList, Acc) ->
@@ -73,7 +82,7 @@ init([MyId]) ->
     erlang:send_after(10, self(), deliver),
     %{ok, Delay} = groups_manager_serv:get_delay_leaf(),
     Delay=0,
-    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false}}.
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager}}.
 
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=_Pending0, stable_time=_StableTime0, labels=_Labels, myid=_MyId}) ->
@@ -132,9 +141,9 @@ handle_info(find_deliverables, S0=#state{stable_time=StableTime0, myid=MyId, lab
     Pending1 = deliver_labels(Labels, StableTime0, MyId, []),
     {noreply, S0#state{pending=Pending1}};
 
-handle_info(deliver, S0=#state{myid=MyId, labels=Labels, vclock=VClock0}) ->
+handle_info(deliver, S0=#state{myid=MyId, labels=Labels, vclock=VClock0, manager=Manager}) ->
     StableTime1 = compute_stable(VClock0),
-    ok = deliver_labels_new(Labels, StableTime1, MyId, []),
+    ok = deliver_labels_new(Labels, StableTime1, MyId, [], Manager),
     erlang:send_after(1, self(), deliver),
     {noreply, S0};
 
@@ -156,13 +165,13 @@ compute_stable(VClock) ->
 deliver_labels(Labels, StableTime, MyId, Deliverables0) ->
     case ets:first(Labels) of
         '$end_of_table' ->
-            propagate_stream(lists:reverse(Deliverables0), MyId),
+            propagate_stream(lists:reverse(Deliverables0), MyId, manager),
             false;
         {TimeStamp, Time, _Partition, Label}=Key when TimeStamp =< StableTime ->
             Now = saturn_utilities:now_microsec(),
             case Time > Now of
                 true ->
-                    propagate_stream(lists:reverse(Deliverables0), MyId),
+                    propagate_stream(lists:reverse(Deliverables0), MyId, manager),
                     NextDelivery = trunc((Time - Now)/1000),
                     erlang:send_after(NextDelivery, self(), find_deliverables),                   
                     true;
@@ -173,60 +182,38 @@ deliver_labels(Labels, StableTime, MyId, Deliverables0) ->
                     false
             end;
         _Key ->
-            propagate_stream(lists:reverse(Deliverables0), MyId),
+            propagate_stream(lists:reverse(Deliverables0), MyId, manager),
             false
     end.
 
-deliver_labels_new(Labels, StableTime, MyId, Deliverables0) ->
+deliver_labels_new(Labels, StableTime, MyId, Deliverables0, Manager) ->
     case ets:first(Labels) of
         '$end_of_table' ->
-            propagate_stream(lists:reverse(Deliverables0), MyId),
+            propagate_stream(lists:reverse(Deliverables0), MyId, Manager),
             ok;
         {TimeStamp, _Time, _Partition, Label}=Key when TimeStamp =< StableTime ->
             true = ets:delete(Labels, Key),
             BKey = Label#label.bkey,
-            deliver_labels_new(Labels, StableTime, MyId, [{BKey, Label}|Deliverables0]),
+            deliver_labels_new(Labels, StableTime, MyId, [{BKey, Label}|Deliverables0], Manager),
             ok;
         _Key ->
-            propagate_stream(lists:reverse(Deliverables0), MyId),
+            propagate_stream(lists:reverse(Deliverables0), MyId, Manager),
             ok
     end.
 
-propagate_stream(FinalStream, MyId) ->
-    case ?PROPAGATION_MODE of
-        bypass_tree ->
-            Streams = lists:foldl(fun({BKey, Label}, Acc) ->
-                                    case groups_manager_serv:get_datanodes_ids(BKey) of
-                                        {ok, Group} ->
-                                            lists:foldl(fun(Id, AccIn) ->
-                                                            dict:append(Id, Label, AccIn)
-                                                        end, Acc, Group);
-                                        {error, Reason2} ->
-                                            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-                                    end
-                                  end, dict:new(), FinalStream),
-            lists:foreach(fun({Id, Stream}) ->
-                            saturn_leaf_converger:handle(Id, {new_stream, Stream, MyId})
-                          end, dict:to_list(Streams));
-        naive_erlang ->
-            case groups_manager_serv:filter_stream_leaf_id(FinalStream) of
-                {ok, [], _} ->
-                    %lager:info("Nothing to send"),
-                    noop;
-                {ok, _, no_indexnode} ->
-                    noop;
-                {ok, Stream, Id} ->
-                    saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
-            end;
-        short_tcp ->
-            case groups_manager_serv:filter_stream_leaf(FinalStream) of
-                {ok, [], _} ->
-                    noop;
-                {ok, _, no_indexnode} ->
-                    noop;
-                {ok, Stream, {Host, Port}} ->
-                    saturn_leaf_propagation_fsm_sup:start_fsm([Port, Host, {new_stream, Stream, MyId}])
-            end
+propagate_stream(FinalStream, MyId, Manager) ->
+    Tree = Manager#state_manager.tree,
+    NLeaves = Manager#state_manager.nleaves,
+    Groups = Manager#state_manager.groups,
+    Paths = Manager#state_manager.paths,
+    case groups_manager:filter_stream_leaf_id(FinalStream, Tree, NLeaves, MyId, Groups, Paths) of
+        {ok, [], _} ->
+            %lager:info("Nothing to send"),
+            noop;
+        {ok, _, no_indexnode} ->
+            noop;
+        {ok, Stream, Id} ->
+            saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
     end.
 
 -ifdef(TEST).

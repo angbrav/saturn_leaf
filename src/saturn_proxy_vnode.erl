@@ -337,11 +337,10 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
             S0
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
-    %saturn_leaf_producer:new_label(MyId, Label, Partition, true),
+    saturn_leaf_producer:new_label(MyId, Label, Partition, true),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
-                            %saturn_leaf_converger:handle(Id, {new_stream, Label, MyId}),
                             saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
                           end, Group);
         {error, Reason2} ->
