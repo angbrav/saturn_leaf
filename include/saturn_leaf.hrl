@@ -27,7 +27,8 @@
 
 -define(HEARTBEAT_FREQ, 1000).
 
--define(PROPAGATION_MODE, naive_erlang).
+%-define(PROPAGATION_MODE, naive_erlang).
+-define(PROPAGATION_MODE, bypass_tree).
 %-define(PROPAGATION_MODE, short_tcp).
 
 -record(label, {operation :: remote_read | update | remote_reply,
