@@ -310,12 +310,13 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=P
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
         false ->
             %Remote read
-            PhysicalClock = saturn_utilities:now_microsec(),
-            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            {ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
-            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
-            {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
+            ?BACKEND_CONNECTOR:read(Connector, {BKey});
+            %PhysicalClock = saturn_utilities:now_microsec(),
+            %TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
+            %{ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
+            %Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            %saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
+            %{remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
