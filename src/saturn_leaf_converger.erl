@@ -65,7 +65,7 @@ handle_call(restart, _From, S0=#state{ops=Ops}) ->
     Ops1 = ets:new(operations_converger, [set, named_table]),
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0}}.
 
-handle_cast({new_stream, _Stream, _SenderId}, S0=#state{labels_queue=_Labels0, queue_len=_QL0, ops=_Ops, myid=_MyId}) ->
+handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=_Labels0, queue_len=_QL0, ops=_Ops, myid=_MyId}) ->
     lager:info("New stream received. Label: ~p", Stream),
     %case QL0 of
     %    0 ->
