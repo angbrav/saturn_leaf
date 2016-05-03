@@ -310,8 +310,8 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=P
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
         false ->
             %Remote read
-            {Bucket, _Key} = BKey,
-            lager:info("Remote read! id:~p, bkey:~p, ets:~p", [MyId, BKey, ets:lookup(Manager#state_manager.groups, Bucket)]),
+            %{Bucket, _Key} = BKey,
+            %lager:info("Remote read! id:~p, bkey:~p, ets:~p", [MyId, BKey, ets:lookup(Manager#state_manager.groups, Bucket)]),
             PhysicalClock = saturn_utilities:now_microsec(),
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
             {ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
