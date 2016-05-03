@@ -187,10 +187,7 @@ handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manage
 
 handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
-    true = ets:delete_all_objects(Table),
-    lists:foreach(fun(Item) ->
-                    true = ets:insert(Table, Item)
-                  end, dict:to_list(Groups)),
+    ok = groups_manager:set_groups(Table, Groups),
     {reply, ok, S0};
 
 handle_command({read, BKey, Clock}, From, S0) ->

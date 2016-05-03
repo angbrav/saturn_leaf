@@ -25,7 +25,8 @@
 -include("saturn_leaf.hrl").
 %% API
 -export([start_link/0,
-         start_leaf/2]).
+         start_leaf/2,
+         start_internal/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -49,22 +50,21 @@ start_leaf(Port, MyId) ->
                     {saturn_leaf_converger, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_converger]}),
     
-    case ?PROPAGATION_MODE of
-        short_tcp ->
-            supervisor:start_child(?MODULE, {saturn_leaf_tcp_recv_fsm,
-                    {saturn_leaf_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, MyId]},
-                    permanent, 5000, worker, [saturn_leaf_tcp_recv_fsm]}),
-
-            supervisor:start_child(?MODULE, {saturn_leaf_tcp_connection_handler_fsm_sup,
-                    {saturn_leaf_tcp_connection_handler_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [saturn_leaf_tcp_connection_handler_fsm_sup]});
-
-        _ ->
-            noop
-    end,
     supervisor:start_child(?MODULE, {saturn_leaf_producer,
                     {saturn_leaf_producer, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_producer]}),
+
+    {ok, {Host, Port}}.
+
+start_internal(Port, MyId) ->
+    
+    supervisor:start_child(?MODULE, {saturn_internal_serv,
+                    {saturn_internal_serv, start_link, [MyId]},
+                    permanent, 5000, worker, [saturn_internal_serv]}),
+    
+    {ok, List} = inet:getif(),
+    {Ip, _, _} = hd(List),
+    Host = inet_parse:ntoa(Ip),
 
     {ok, {Host, Port}}.
 
@@ -76,16 +76,10 @@ init(_Args) ->
     ProxyMaster = {?PROXY_MASTER,
                   {riak_core_vnode_master, start_link, [saturn_proxy_vnode]},
                   permanent, 5000, worker, [riak_core_vnode_master]},
-    PropagatorSup = {saturn_leaf_propagation_fsm_sup,
-                    {saturn_leaf_propagation_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [saturn_leaf_propagation_fsm_sup]},
     ClientReceiver = {saturn_client_receiver,
                      {saturn_client_receiver, start_link, []},
                      permanent, 5000, worker, [saturn_client_receiver]},
-    ManagerServ = {groups_manager_serv2,
-                  {groups_manager_serv2, start_link, []},
-                  permanent, 5000, worker, [groups_manager_serv2]},
-    Childs0 = [ProxyMaster, PropagatorSup, ClientReceiver, ManagerServ],
+    Childs0 = [ProxyMaster, ClientReceiver],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,

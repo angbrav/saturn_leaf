@@ -20,6 +20,8 @@
          get_delay_leaf/3,
          get_delays_internal/2,
          init_state/1,
+         path_from_tree_dict/2,
+         set_groups/2,
          do_replicate/3]).
 
 init_state(Id) ->
@@ -31,6 +33,13 @@ init_state(Id) ->
                    paths=Paths,
                    nleaves=NLeaves,
                    groups=Groups}.
+
+set_groups(Table, Groups) ->
+    true = ets:delete_all_objects(Table),
+    lists:foreach(fun(Item) ->
+                    true = ets:insert(Table, Item)
+                  end, dict:to_list(Groups)),
+    ok.
 
 get_all_nodes_but_myself(Tree, MyId) ->
     Nodes = dict:fetch_keys(Tree),
@@ -190,6 +199,24 @@ interested(Id, Bucket, PreId, Groups, NLeaves, Paths) ->
 
 is_leaf(Id, Total) ->
     Id<Total.
+
+path_from_tree_dict(Tree, Leaves) ->
+    lists:foldl(fun({Id, Row}, Paths0) ->
+                    case (Id >= Leaves) of
+                        true ->
+                            {OneHopPath, _} = lists:foldl(fun(Elem, {Acc, C}) ->
+                                                            case Elem of
+                                                                -1 ->
+                                                                    {Acc, C+1};
+                                                                _ ->
+                                                                    {Acc ++ [C], C+1}
+                                                             end
+                                                           end, {[], 0}, Row),
+                            dict:store(Id, OneHopPath, Paths0);
+                        false ->
+                            Paths0
+                    end
+                end, dict:new(), dict:to_list(Tree)).
 
 %%private
             
@@ -414,5 +441,16 @@ find_internal_test() ->
     NLeaves = 4,
     Index = find_internal(List, 0, NLeaves),
     ?assertEqual(6, Index).
+
+path_from_tree_dict_test() ->
+    P1 = dict:store(0,[-1,1,2,3,-1],dict:new()),
+    P2 = dict:store(1,[4,-1,5,6,-1],P1),
+    P3 = dict:store(2,[7,8,-1,-1,9],P2),
+    P4 = dict:store(3,[10,11,-1,-1,12],P3),
+    P5 = dict:store(4,[-1,-1,13,14,-1],P4),
+    Paths = path_from_tree_dict(P5, 3),
+    ?assertEqual(2,length(dict:fetch_keys(Paths))),
+    ?assertEqual([0,1,4],dict:fetch(3, Paths)),
+    ?assertEqual([2,3],dict:fetch(4, Paths)).
 
 -endif.

@@ -34,7 +34,7 @@ confirm() ->
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
     ]),
-    Clusters = [Cluster1, Cluster2, Cluster3, Cluster4, Cluster5] = rt:build_clusters([1, 1, 1, 1, 1]),
+    _Clusters = [Cluster1, Cluster2, Cluster3, Cluster4, Cluster5] = rt:build_clusters([1, 1, 1, 1, 1]),
 
 
     lager:info("Waiting for ring to converge."),
@@ -65,19 +65,6 @@ confirm() ->
     rt:wait_for_service(Leaf2, saturn_proxy),
     rt:wait_for_service(Leaf3, saturn_proxy),
 
-    Tree0 = dict:store(0, [-1,1,2,3,-1], dict:new()),
-    Tree1 = dict:store(1, [4,-1,5,6,-1], Tree0),
-    Tree2 = dict:store(2, [7,8,-1,-1,9], Tree1),
-    Tree3 = dict:store(3, [10,11,-1,-1,12], Tree2),
-    Tree4 = dict:store(4, [-1,-1,13,14,-1], Tree3),
-
-    Groups0 = dict:store(1, [0, 1, 2], dict:new()),
-    Groups1 = dict:store(2, [0, 1, 2], Groups0),
-    Groups2 = dict:store(3, [0, 1, 2], Groups1),
-
-    ok = common_rt:set_tree_clusters(Clusters, Tree4, 3),
-    ok = common_rt:set_groups_clusters(Clusters, Groups2),
-
     %% Starting leaf1
     {ok, _HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
     %% Starting leaf2
@@ -90,9 +77,34 @@ confirm() ->
     ok=rpc:call(Leaf3, saturn_leaf_producer, check_ready, [2]),
 
     %% Starting internal1
-    {ok, _HostPortInternal1}=rpc:call(Internal1, saturn_internal_sup, start_internal, [4043, 3]),
+    {ok, _HostPortInternal1}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4043, 3]),
     %% Starting internal2
-    {ok, _HostPortInternal2}=rpc:call(Internal2, saturn_internal_sup, start_internal, [4044, 4]),
+    {ok, _HostPortInternal2}=rpc:call(Internal2, saturn_leaf_sup, start_internal, [4044, 4]),
+
+    Tree0 = dict:store(0, [-1,1,2,3,-1], dict:new()),
+    Tree1 = dict:store(1, [4,-1,5,6,-1], Tree0),
+    Tree2 = dict:store(2, [7,8,-1,-1,9], Tree1),
+    Tree3 = dict:store(3, [10,11,-1,-1,12], Tree2),
+    Tree4 = dict:store(4, [-1,-1,13,14,-1], Tree3),
+
+    Groups0 = dict:store(1, [0, 1, 2], dict:new()),
+    Groups1 = dict:store(2, [0, 1, 2], Groups0),
+    Groups2 = dict:store(3, [0, 1, 2], Groups1),
+    
+    ok = rpc:call(Leaf1, saturn_leaf_producer, set_tree, [0, Tree4, 3]),
+    ok = rpc:call(Leaf1, saturn_leaf_producer, set_groups, [0, Groups2]),
+
+    ok = rpc:call(Leaf2, saturn_leaf_producer, set_tree, [1, Tree4, 3]),
+    ok = rpc:call(Leaf2, saturn_leaf_producer, set_groups, [1, Groups2]),
+
+    ok = rpc:call(Leaf3, saturn_leaf_producer, set_tree, [2, Tree4, 3]),
+    ok = rpc:call(Leaf3, saturn_leaf_producer, set_groups, [2, Groups2]),
+
+    ok = rpc:call(Internal1, saturn_internal_serv, set_tree, [3, Tree4, 3]),
+    ok = rpc:call(Internal1, saturn_internal_serv, set_groups, [3, Groups2]),
+
+    ok = rpc:call(Internal2, saturn_internal_serv, set_tree, [4, Tree4, 3]),
+    ok = rpc:call(Internal2, saturn_internal_serv, set_groups, [4, Groups2]),
 
     five_nodes_test(Leaf1, Leaf2, Leaf3),
 

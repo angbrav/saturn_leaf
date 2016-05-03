@@ -34,6 +34,8 @@
 -export([partition_heartbeat/3,
          check_ready/1,
          restart/1,
+         set_tree/3,
+         set_groups/2,
          new_label/4]).
 
 -record(state, {vclock :: dict(),
@@ -60,6 +62,12 @@ check_ready(MyId) ->
 
 restart(MyId) ->
     gen_server:call({global, reg_name(MyId)}, restart, infinity).
+
+set_tree(MyId, TreeDict, NLeaves) ->
+    gen_server:call({global, reg_name(MyId)}, {set_tree, TreeDict, NLeaves}, infinity).
+
+set_groups(MyId, Groups) ->
+    gen_server:call({global, reg_name(MyId)}, {set_groups, Groups}, infinity).
 
 init([MyId]) ->
     Manager = groups_manager:init_state(integer_to_list(MyId) ++ "producer"),
@@ -122,6 +130,26 @@ handle_call(restart, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
                             dict:store(Partition, 0, Acc)
                           end, dict:new(), dict:to_list(VClock0)),
     {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false}};
+
+handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0}) ->
+    Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:set_tree(hd(PrefList), Paths, Tree, Leaves)
+                  end, GrossPrefLists),
+    Manager1 = Manager0#state_manager{paths=Paths, tree=Tree, nleaves=Leaves},
+    {reply, ok, S0#state{manager=Manager1}};
+
+handle_call({set_groups, RGroups}, _From, S0=#state{manager=Manager}) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:set_groups(hd(PrefList), RGroups)
+                  end, GrossPrefLists),
+    Table = Manager#state_manager.groups,
+    ok = groups_manager:set_groups(Table, RGroups),
+    {reply, ok, S0};
 
 handle_call(check_ready, _From, S0) ->
     {reply, ok, S0};
