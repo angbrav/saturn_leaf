@@ -19,7 +19,18 @@
          get_all_nodes_but_myself/2,
          get_delay_leaf/3,
          get_delays_internal/2,
+         init_state/1,
          do_replicate/3]).
+
+init_state(Id) ->
+    Name = Id ++ "groups",
+    Groups = ets:new(list_to_atom(Name), [set, named_table, private]),
+    ok = groups_manager:new_groupsfile(?GROUPSFILE, Groups),
+    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(?TREEFILE),
+    #state_manager{tree=Tree,
+                   paths=Paths,
+                   nleaves=NLeaves,
+                   groups=Groups}.
 
 get_all_nodes_but_myself(Tree, MyId) ->
     Nodes = dict:fetch_keys(Tree),

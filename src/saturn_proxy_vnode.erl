@@ -137,14 +137,7 @@ remote_read(Node, Label) ->
 
 
 init([Partition]) ->
-    Name = integer_to_list(Partition) ++ "groups",
-    Groups = ets:new(list_to_atom(Name), [set, named_table, private]),
-    ok = groups_manager:new_groupsfile(?GROUPSFILE, Groups),
-    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(?TREEFILE),
-    Manager = #state_manager{tree=Tree,
-                             paths=Paths,
-                             nleaves=NLeaves,
-                             groups=Groups},
+    Manager = groups_manager:init_state(integer_to_list(Partition)),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
