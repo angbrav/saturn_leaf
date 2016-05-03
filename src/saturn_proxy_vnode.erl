@@ -313,7 +313,7 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
     case groups_manager_serv:get_datanodes_ids(BKey) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
-                            saturn_leaf_converger:handle(Id, {new_stream, Label, MyId}),
+                            %saturn_leaf_converger:handle(Id, {new_stream, Label, MyId}),
                             saturn_leaf_converger:handle(Id, {new_operation, Label, Value})
                           end, Group);
         {error, Reason2} ->
