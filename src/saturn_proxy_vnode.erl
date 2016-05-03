@@ -304,7 +304,7 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            payload=Payload
            }.
 
-do_read(_Type, BKey, _Clock, _From, _S0=#state{myid=MyId, max_ts=_MaxTS0, partition=_Partition, connector=Connector, manager=Manager}) ->
+do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector, manager=Manager}) ->
     case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
         true ->    
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
@@ -312,13 +312,12 @@ do_read(_Type, BKey, _Clock, _From, _S0=#state{myid=MyId, max_ts=_MaxTS0, partit
             %Remote read
             {Bucket, _Key} = BKey,
             lager:info("Remote read! id:~p, bkey:~p, ets:~p", [MyId, BKey, ets:lookup(Manager#state_manager.groups, Bucket)]),
-            ?BACKEND_CONNECTOR:read(Connector, {BKey});
-            %PhysicalClock = saturn_utilities:now_microsec(),
-            %TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            %{ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
-            %Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
-            %saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
-            %{remote, S0#state{max_ts=TimeStamp, last_label=Label}};
+            PhysicalClock = saturn_utilities:now_microsec(),
+            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
+            {ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
+            {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
