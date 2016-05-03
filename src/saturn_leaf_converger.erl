@@ -65,34 +65,34 @@ handle_call(restart, _From, S0=#state{ops=Ops}) ->
     Ops1 = ets:new(operations_converger, [set, named_table]),
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0}}.
 
-handle_cast({new_stream, _Stream, _SenderId}, S0=#state{labels_queue=_Labels0, queue_len=_QL0, ops=_Ops, myid=_MyId}) ->
+handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId}) ->
     %lager:info("New stream received. Label: ~p", Stream),
-    %case QL0 of
-    %    0 ->
-    %        {Labels1, QL1} = flush_list(Stream, Ops, MyId),
-    %        {noreply, S0#state{labels_queue=Labels1, queue_len=QL1}}; 
-    %    _ ->
-    %        {Labels1, Total} = lists:foldl(fun(Elem, {Queue, Sum}) ->
-    %                                        {queue:in(Elem, Queue), Sum + 1}
-    %                                       end, {Labels0, 0}, Stream),
-    %        {noreply, S0#state{labels_queue=Labels1, queue_len=QL0+Total}}
-    %end;
-    {noreply, S0};
+    case QL0 of
+        0 ->
+            {Labels1, QL1} = flush_list(Stream, Ops, MyId),
+            {noreply, S0#state{labels_queue=Labels1, queue_len=QL1}}; 
+        _ ->
+            {Labels1, Total} = lists:foldl(fun(Elem, {Queue, Sum}) ->
+                                            {queue:in(Elem, Queue), Sum + 1}
+                                           end, {Labels0, 0}, Stream),
+            {noreply, S0#state{labels_queue=Labels1, queue_len=QL0+Total}}
+    end;
+    %{noreply, S0};
 
-handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=_Labels0, ops=_Ops, queue_len=_QL0, myid=_MyId}) ->
+handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
-    ok = execute_operation(Label, Value),
-    {noreply, S0};
-    %case queue:peek(Labels0) of
-    %    {value, Label} ->
-    %        ok = execute_operation(Label, Value),
-    %        Labels1 = queue:drop(Labels0),
-    %        {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId),
-    %        {noreply, S0#state{labels_queue=Labels2, queue_len=QL1}};
-    %    _ ->
-    %        true = ets:insert(Ops, {Label, Value}),
-    %        {noreply, S0}
-    %end;
+    %ok = execute_operation(Label, Value),
+    %{noreply, S0};
+    case queue:peek(Labels0) of
+        {value, Label} ->
+            ok = execute_operation(Label, Value),
+            Labels1 = queue:drop(Labels0),
+            {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId),
+            {noreply, S0#state{labels_queue=Labels2, queue_len=QL1}};
+        _ ->
+            true = ets:insert(Ops, {Label, Value}),
+            {noreply, S0}
+    end;
 
 handle_cast(_Info, State) ->
     {noreply, State}.
