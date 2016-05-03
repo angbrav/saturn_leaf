@@ -79,45 +79,20 @@ confirm() ->
     ok = common_rt:set_groups_clusters(Clusters, Groups2),
 
     %% Starting leaf1
-    {ok, HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
+    {ok, _HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
     %% Starting leaf2
-    {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
+    {ok, _HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
     %% Starting leaf3
-    {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
+    {ok, _HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
 
     ok=rpc:call(Leaf1, saturn_leaf_producer, check_ready, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
     ok=rpc:call(Leaf3, saturn_leaf_producer, check_ready, [2]),
 
     %% Starting internal1
-    {ok, HostPortInternal1}=rpc:call(Internal1, saturn_internal_sup, start_internal, [4043, 3]),
+    {ok, _HostPortInternal1}=rpc:call(Internal1, saturn_internal_sup, start_internal, [4043, 3]),
     %% Starting internal2
-    {ok, HostPortInternal2}=rpc:call(Internal2, saturn_internal_sup, start_internal, [4044, 4]),
-
-    ok = common_rt:new_node_cluster(Cluster1, 1, HostPortLeaf2),
-    ok = common_rt:new_node_cluster(Cluster1, 2, HostPortLeaf3),
-    ok = common_rt:new_node_cluster(Cluster1, 3, HostPortInternal1),
-    ok = common_rt:new_node_cluster(Cluster1, 4, HostPortInternal2),
-
-    ok = common_rt:new_node_cluster(Cluster2, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster2, 2, HostPortLeaf3),
-    ok = common_rt:new_node_cluster(Cluster2, 3, HostPortInternal1),
-    ok = common_rt:new_node_cluster(Cluster2, 4, HostPortInternal2),
-
-    ok = common_rt:new_node_cluster(Cluster3, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster3, 1, HostPortLeaf2),
-    ok = common_rt:new_node_cluster(Cluster3, 3, HostPortInternal1),
-    ok = common_rt:new_node_cluster(Cluster3, 4, HostPortInternal2),
-
-    ok = common_rt:new_node_cluster(Cluster4, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster4, 1, HostPortLeaf2),
-    ok = common_rt:new_node_cluster(Cluster4, 2, HostPortLeaf3),
-    ok = common_rt:new_node_cluster(Cluster4, 4, HostPortInternal2),
-
-    ok = common_rt:new_node_cluster(Cluster5, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster5, 1, HostPortLeaf2),
-    ok = common_rt:new_node_cluster(Cluster5, 2, HostPortLeaf3),
-    ok = common_rt:new_node_cluster(Cluster5, 3, HostPortInternal1),
+    {ok, _HostPortInternal2}=rpc:call(Internal2, saturn_internal_sup, start_internal, [4044, 4]),
 
     five_nodes_test(Leaf1, Leaf2, Leaf3),
 

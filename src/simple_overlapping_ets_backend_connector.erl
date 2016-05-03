@@ -45,10 +45,10 @@ read(ETS, Payload)->
 
 connect([Partition]) ->
     Name = integer_to_list(Partition) ++ "kv",
-    ets:new(list_to_atom(Name), [set, named_table]).
+    ets:new(list_to_atom(Name), [set, named_table, private]).
 
 clean(ETS, Partition) ->
     true = ets:delete(ETS),
     Name = integer_to_list(Partition) ++ "kv",
-    ets:new(list_to_atom(Name), [set, named_table]),
+    ets:new(list_to_atom(Name), [set, named_table, private]),
     ETS.

@@ -51,6 +51,8 @@
          init_proxy/2,
          remote_read/2,
          last_label/1,
+         set_tree/4,
+         set_groups/2,
          restart/1,
          check_ready/1]).
 
@@ -58,6 +60,7 @@
                 max_ts,
                 connector,
                 last_label,
+                manager,
                 myid}).
 
 %% API
@@ -76,6 +79,16 @@ last_label(BKey) ->
 init_proxy(Node, MyId) ->
     riak_core_vnode_master:sync_command(Node,
                                         {init_proxy, MyId},
+                                        ?PROXY_MASTER).
+
+set_tree(Node, Paths, Tree, NLeaves) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_tree, Paths, Tree, NLeaves},
+                                        ?PROXY_MASTER).
+
+set_groups(Node, Groups) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_groups, Groups},
                                         ?PROXY_MASTER).
 
 restart(Node) ->
@@ -124,12 +137,21 @@ remote_read(Node, Label) ->
 
 
 init([Partition]) ->
-    lager:info("Vnode init"),
+    Name = integer_to_list(Partition) ++ "groups",
+    Groups = ets:new(list_to_atom(Name), [set, named_table, private]),
+    ok = groups_manager:new_groupsfile(?GROUPSFILE, Groups),
+    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(?TREEFILE),
+    Manager = #state_manager{tree=Tree,
+                             paths=Paths,
+                             nleaves=NLeaves,
+                             groups=Groups},
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 max_ts=0,
                 last_label=none,
-                connector=Connector}}.
+                connector=Connector,
+                manager=Manager}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
@@ -165,8 +187,18 @@ handle_command(restart, _Sender, S0=#state{connector=Connector0, partition=Parti
                          connector=Connector1}};
 
 handle_command({init_proxy, MyId}, _From, S0) ->
-    groups_manager_serv:set_myid(MyId),
     {reply, ok, S0#state{myid=MyId}};
+
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager}) ->
+    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}}};
+
+handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
+    Table = Manager#state_manager.groups,
+    true = ets:delete_all_objects(Table),
+    lists:foreach(fun(Item) ->
+                    true = ets:insert(Table, Item)
+                  end, dict:to_list(Groups)),
+    {reply, ok, S0};
 
 handle_command({read, BKey, Clock}, From, S0) ->
     case do_read(sync, BKey, Clock, From, S0) of
@@ -272,28 +304,27 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            payload=Payload
            }.
 
-do_read(_Type, BKey, _Clock, _From, _S0=#state{myid=_MyId, max_ts=_MaxTS0, partition=_Partition, connector=Connector}) ->
-    ?BACKEND_CONNECTOR:read(Connector, {BKey}).
-    %case groups_manager_serv:do_replicate(BKey) of
-        %true ->    
-            %?BACKEND_CONNECTOR:read(Connector, {BKey});
-        %false ->
+do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector, manager=Manager}) ->
+    case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
+        true ->    
+            ?BACKEND_CONNECTOR:read(Connector, {BKey});
+        false ->
             %Remote read
-            %PhysicalClock = saturn_utilities:now_microsec(),
-            %TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            %{ok, BucketSource} = groups_manager_serv:get_bucket_sample(),
-            %Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
-            %saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
-            %{remote, S0#state{max_ts=TimeStamp, last_label=Label}};
-        %{error, Reason} ->
-            %lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
-            %{error, Reason}
-    %end.
+            PhysicalClock = saturn_utilities:now_microsec(),
+            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
+            {ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
+            {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
+        {error, Reason} ->
+            lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
+            {error, Reason}
+    end.
     
-do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0}) ->
+do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0, manager=Manager}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
-    S1 = case groups_manager_serv:do_replicate(BKey) of
+    S1 = case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             S0#state{connector=Connector1};
@@ -305,7 +336,7 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
     %saturn_leaf_producer:new_label(MyId, Label, Partition, true),
-    case groups_manager_serv:get_datanodes_ids(BKey) of
+    case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
                             %saturn_leaf_converger:handle(Id, {new_stream, Label, MyId}),

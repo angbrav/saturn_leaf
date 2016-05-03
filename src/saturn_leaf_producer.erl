@@ -71,7 +71,8 @@ init([MyId]) ->
                        end, dict:new(), GrossPrefLists),
     Labels = ets:new(labels_producer, [ordered_set, named_table, private]),
     erlang:send_after(10, self(), deliver),
-    {ok, Delay} = groups_manager_serv:get_delay_leaf(),
+    %{ok, Delay} = groups_manager_serv:get_delay_leaf(),
+    Delay=0,
     {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false}}.
 
 

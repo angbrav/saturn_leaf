@@ -49,7 +49,7 @@ set_tree_clusters([], _Tree, _Leaves) ->
 
 set_tree_clusters([Cluster|T], Tree, Leaves) ->
     lists:foreach(fun(Node) ->
-                    rpc:call(Node, groups_manager_serv, set_treedict, [Tree, Leaves])
+                    rpc:call(Node, groups_manager_serv2, set_treedict, [Tree, Leaves])
                   end, Cluster),
     set_tree_clusters(T, Tree, Leaves).
     
@@ -58,6 +58,6 @@ set_groups_clusters([], _Groups) ->
 
 set_groups_clusters([Cluster|T], Groups) ->
     lists:foreach(fun(Node) ->
-                    rpc:call(Node, groups_manager_serv, set_groupsdict, [Groups])
+                    rpc:call(Node, groups_manager_serv2, set_groupsdict, [Groups])
                   end, Cluster),
     set_groups_clusters(T, Groups).

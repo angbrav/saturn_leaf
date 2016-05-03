@@ -82,7 +82,10 @@ init(_Args) ->
     ClientReceiver = {saturn_client_receiver,
                      {saturn_client_receiver, start_link, []},
                      permanent, 5000, worker, [saturn_client_receiver]},
-    Childs0 = [ProxyMaster, PropagatorSup, ClientReceiver],
+    ManagerServ = {groups_manager_serv2,
+                  {groups_manager_serv2, start_link, []},
+                  permanent, 5000, worker, [groups_manager_serv2]},
+    Childs0 = [ProxyMaster, PropagatorSup, ClientReceiver, ManagerServ],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,
