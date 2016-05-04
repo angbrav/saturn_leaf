@@ -5,8 +5,8 @@
 -define(SIMPLE_MASTER, saturn_simple_backend_vnode_master).
 -define(SIMPLE_SERVICE, saturn_simple_backend).
 
--define(GROUPSFILE, "data/manager/groups_file_simple.saturn").
--define(TREEFILE, "data/manager/tree_file_simple.saturn").
+-define(GROUPSFILE, "data/manager/groups.saturn").
+-define(TREEFILE, "data/manager/tree.saturn").
 -define(TREEFILE_TEST, "../include/tree_file_test.saturn").
 -define(GROUPSFILE_TEST, "../include/groups_file_test.saturn").
 
@@ -16,7 +16,7 @@
 
 %SIMPLE OVERLAPPING_BACKEND
 -define(BACKEND, simple_overlapping_backend).
--define(BACKEND_CONNECTOR, simple_overlapping_dict_backend_connector).
+-define(BACKEND_CONNECTOR, simple_overlapping_ets_backend_connector).
 
 %RIAK
 %-define(BACKEND, riak_backend).
@@ -47,3 +47,8 @@
                          bucket_source,
                          client
                         }).
+
+-record(state_manager, {tree,
+                        groups,
+                        paths,
+                        nleaves}).
