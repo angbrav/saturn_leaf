@@ -289,6 +289,7 @@ do_read(Type, BKey, From, _S0=#state{connector=Connector, myid=MyId, partition=P
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
         {ok, Id} ->
             %Remote read
+            lager:info("Remote Update! Key: ~p", [BKey]),
             Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, type_call=Type}),
             Receiver = dict:fetch(Id, Receivers),
             saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
