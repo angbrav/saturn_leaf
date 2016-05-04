@@ -44,17 +44,50 @@ confirm() ->
         {saturn_leaf, [{riak_port, 8001}]}
     ]),
     N = 2,
-    [Cluster1] = [[Node1, _Node2]] = rt:build_clusters([N]),
+    [Cluster1, Cluster2, Cluster3] = rt:build_clusters([N, 1, 2]),
 
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
+    rt:wait_until_ring_converged(Cluster2),
+    rt:wait_until_ring_converged(Cluster3),
 
+    [Node1, _Node2] = Cluster1,
+    Leaf2 = hd(Cluster2),
+    Internal1 = hd(Cluster3),
+    
+
+    pong = rpc:call(Node1, net_adm, ping, [Leaf2]),
+    pong = rpc:call(Node1, net_adm, ping, [Internal1]),
+    pong = rpc:call(Leaf2, net_adm, ping, [Internal1]),
+
+    rt:wait_for_service(Leaf2, saturn_proxy),
     rt:wait_for_service(Node1, saturn_proxy),
 
     %% Starting servers in one node (Node1)
     {ok, _HostPort}=rpc:call(Node1, saturn_leaf_sup, start_leaf, [4040, 0]),
+    {ok, _HostPort}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4040, 1]),
 
     ok=rpc:call(Node1, saturn_leaf_producer, check_ready, [0]),
+    ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
+
+    {ok, _HostPort}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4040, 2]),
+
+    Tree0 = dict:store(0, [-1, 300, 50], dict:new()),
+    Tree1 = dict:store(1, [300, -1, 70], Tree0),
+    Tree2 = dict:store(2, [50, 70, -1], Tree1),
+
+    Groups0 = dict:store(1, [0, 1], dict:new()),
+    Groups1 = dict:store(2, [0, 1], Groups0),
+    Groups2 = dict:store(3, [0, 1], Groups1),
+
+    ok = rpc:call(Node1, saturn_leaf_producer, set_tree, [0, Tree2, 2]),
+    ok = rpc:call(Node1, saturn_leaf_producer, set_groups, [0, Groups2]),
+
+    ok = rpc:call(Leaf2, saturn_leaf_producer, set_tree, [1, Tree2, 2]),
+    ok = rpc:call(Leaf2, saturn_leaf_producer, set_groups, [1, Groups2]),
+
+    ok = rpc:call(Internal1, saturn_internal_serv, set_tree, [2, Tree2, 2]),
+    ok = rpc:call(Internal1, saturn_internal_serv, set_groups, [2, Groups2]),
     
     read_updates_different_nodes(Cluster1),
     converger_no_interleaving(Cluster1),
