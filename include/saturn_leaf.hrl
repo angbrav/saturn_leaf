@@ -16,7 +16,7 @@
 
 %SIMPLE OVERLAPPING_BACKEND
 -define(BACKEND, simple_overlapping_backend).
--define(BACKEND_CONNECTOR, simple_overlapping_dict_backend_connector).
+-define(BACKEND_CONNECTOR, simple_overlapping_ets_backend_connector).
 
 %RIAK
 %-define(BACKEND, riak_backend).
