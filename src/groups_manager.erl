@@ -22,6 +22,7 @@
          init_state/1,
          path_from_tree_dict/2,
          set_groups/2,
+         on_path/5,
          do_replicate/3]).
 
 init_state(Id) ->
@@ -50,7 +51,13 @@ get_all_nodes(Tree) ->
     {ok, Nodes}.
 
 get_mypath(MyId, Paths) ->
-    {ok, dict:fetch(MyId, Paths)}.
+    case dict:find(MyId, Paths) of
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            lager:error("Wrong deafult tree file, returning []"),
+            {ok, []}
+    end.
 
 get_bucket_sample(MyId, Groups) ->
     case find_key(ets:first(Groups), Groups, MyId) of
@@ -171,14 +178,38 @@ filter_stream_leaf_id(Stream0, Tree, NLeaves, MyId, Groups, Paths) ->
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
                             {Bucket, _Key} = BKey,
-                            case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
-                                true ->
-                                    Acc ++ [Elem];
-                                false ->
-                                    Acc
-                            end
+                            case Elem#label.operation of
+                                update ->
+                                    case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
+                                        true ->
+                                            Acc ++ [Elem];
+                                        false ->
+                                            Acc
+                                    end;
+                                _ ->
+                                    Acc ++ [Elem]
+                                end
                           end, [], Stream0),
     {ok, Stream1, Internal}.
+
+on_path(Id, Id, _PreId, _Paths, _NLeaves) ->
+    true;
+
+on_path(Id, Destination, PreId, Paths, NLeaves) ->
+    case is_leaf(Id, NLeaves) of
+        true ->
+            false;
+        false ->
+            Links = dict:fetch(Id, Paths),
+            FilteredLinks = lists:foldl(fun(Elem, Acc) ->
+                                        case Elem of
+                                            PreId -> Acc;
+                                            _ -> Acc ++ [Elem]
+                                        end
+                                       end, [], Links),
+            LinksExpanded = expand_links(FilteredLinks, Id, NLeaves, Paths),
+            contains(Destination, LinksExpanded)
+    end.
 
 interested(Id, Bucket, PreId, Groups, NLeaves, Paths) ->
     [{Bucket, Group}] = ets:lookup(Groups, Bucket),

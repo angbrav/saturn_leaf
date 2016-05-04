@@ -45,7 +45,6 @@
                        }).
 
 -record(payload_remote, {to :: all | non_neg_integer(),
-                         bucket_source,
                          client,
                          type_call
                         }).

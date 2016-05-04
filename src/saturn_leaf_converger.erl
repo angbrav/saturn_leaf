@@ -116,7 +116,7 @@ flush_list([], _Ops, _MyId) ->
     {queue:new(), 0};
 
 flush_list([Label|Rest]=List, Ops, MyId) ->
-    case handle_label(Label, Ops, MyId) of
+    case handle_label(Label, Ops) of
         true ->
             flush_list(Rest, Ops, MyId);
         false ->
@@ -126,7 +126,7 @@ flush_list([Label|Rest]=List, Ops, MyId) ->
 flush_queue(Queue, Length, Ops, MyId) ->
     case queue:peek(Queue) of
         {value, Label} ->
-            case handle_label(Label, Ops, MyId) of
+            case handle_label(Label, Ops) of
                 true ->
                     flush_queue(queue:drop(Queue), Length - 1, Ops, MyId);
                 false ->
@@ -136,37 +136,24 @@ flush_queue(Queue, Length, Ops, MyId) ->
             {queue:new(), 0}
     end.
 
-handle_label(Label, Ops, MyId) ->
+handle_label(Label, Ops) ->
     case Label#label.operation of
         remote_read ->
-            Payload = Label#label.payload,
-            Destination = Payload#payload_remote.to,
-            case is_sent_to_me(Destination, MyId) of
-                true ->
-                    BKey = Label#label.bkey,
-                    DocIdx = riak_core_util:chash_key(BKey),
-                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-                    [{IndexNode, _Type}] = PrefList,
-                    saturn_proxy_vnode:remote_read(IndexNode, Label);
-                false ->
-                    noop
-            end,
+            BKey = Label#label.bkey,
+            DocIdx = riak_core_util:chash_key(BKey),
+            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+            [{IndexNode, _Type}] = PrefList,
+            saturn_proxy_vnode:remote_read(IndexNode, Label),
             true;
         remote_reply ->
             Payload = Label#label.payload,
-            Destination = Payload#payload_reply.to,
-            case is_sent_to_me(Destination, MyId) of
-                true ->
-                    Client = Payload#payload_reply.client,
-                    Value = Payload#payload_reply.value,
-                    case Payload#payload_reply.type_call of
-                        sync ->
-                            riak_core_vnode:reply(Client, {ok, {Value, 0}});
-                        async ->
-                            gen_server:reply(Client, {ok, {Value, 0}})
-                    end;
-                false ->
-                    noop
+            Client = Payload#payload_reply.client,
+            Value = Payload#payload_reply.value,
+            case Payload#payload_reply.type_call of
+                sync ->
+                    riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                async ->
+                    gen_server:reply(Client, {ok, {Value, 0}})
             end,
             true;
         update ->
@@ -179,13 +166,6 @@ handle_label(Label, Ops, MyId) ->
                     %lager:info("Operation not received for label: ~p", [Label]),
                     false
             end
-    end.
-
-is_sent_to_me(Destination, MyId) ->
-    case Destination of
-        all -> true;
-        MyId -> true;
-        _ -> false
     end.
 
 -ifdef(TEST).

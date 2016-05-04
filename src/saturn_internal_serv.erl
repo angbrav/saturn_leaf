@@ -56,6 +56,7 @@ init([MyId]) ->
     lager:info("Internal started: ~p", [MyId]),
     Manager = groups_manager:init_state(integer_to_list(MyId) ++ "internal"),
     Paths = Manager#state_manager.paths,
+    lager:info("Paths: ~p", [dict:to_list(Paths)]),
     {ok, Nodes} = groups_manager:get_mypath(MyId, Paths),
     {Queues, Busy} = lists:foldl(fun(Node,{Queues0, Busy0}) ->
                                     {dict:store(Node, queue:new(), Queues0), dict:store(Node, false, Busy0)}
@@ -79,20 +80,32 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                 IdSender ->
                                                     Acc1;
                                                 _ ->
-                                                    case groups_manager:interested(Node, Bucket, MyId, Groups, NLeaves, Paths) of
-                                                        true ->
-                                                            case Label#label.operation of
-                                                                update ->
+                                                    case Label#label.operation of
+                                                        update ->
+                                                            case groups_manager:interested(Node, Bucket, MyId, Groups, NLeaves, Paths) of
+                                                                true ->
                                                                     Delay = dict:fetch(Node, Delays),
                                                                     Now = saturn_utilities:now_microsec(),
-                                                                    Time = Now + Delay;
-                                                                _ ->
-                                                                    Time = 0
-                                                            end,
-                                                            Queue0 = dict:fetch(Node, Acc1),
-                                                            Queue1 = queue:in({Time, Label}, Queue0),
-                                                            dict:store(Node, Queue1, Acc1);
-                                                        false -> Acc1
+                                                                    Time = Now + Delay,
+                                                                    Queue0 = dict:fetch(Node, Acc1),
+                                                                    Queue1 = queue:in({Time, Label}, Queue0),
+                                                                    dict:store(Node, Queue1, Acc1);
+                                                                false -> Acc1
+                                                            end;
+                                                        _ ->
+                                                            Payload = Label#label.payload,
+                                                            Destination = case Label#label.operation of
+                                                                            remote_read -> Payload#payload_remote.to;
+                                                                            remote_reply -> Payload#payload_reply.to
+                                                                          end,
+                                                            case groups_manager:on_path(Node, Destination, MyId, Paths, NLeaves) of
+                                                                true ->
+                                                                    Time = 0,
+                                                                    Queue0 = dict:fetch(Node, Acc1),
+                                                                    Queue1 = queue:in({Time, Label}, Queue0),
+                                                                    dict:store(Node, Queue1, Acc1);
+                                                                false -> Acc1
+                                                            end
                                                     end
                                             end
                                         end, Acc0, dict:fetch_keys(Queues0))

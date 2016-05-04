@@ -231,11 +231,10 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(PhysicalClock, MaxTS0+1),
     Payload = Label#label.payload,
-    Bucket = Payload#payload_remote.bucket_source,
     Client = Payload#payload_remote.client,
     Type = Payload#payload_remote.type_call,
     Source = Label#label.sender,
-    NewLabel = create_label(remote_reply, {Bucket, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type}),
+    NewLabel = create_label(remote_reply, {routing, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
@@ -295,17 +294,16 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
            }.
 
 do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector, manager=Manager}) ->
-    case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
-        true ->    
+    Groups = Manager#state_manager.groups,
+    Tree = Manager#state_manager.tree,
+    case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
+        {ok, MyId} ->    
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
-        false ->
+        {ok, Id} ->
             %Remote read
-            %{Bucket, _Key} = BKey,
-            %lager:info("Remote read! id:~p, bkey:~p, ets:~p", [MyId, BKey, ets:lookup(Manager#state_manager.groups, Bucket)]),
             PhysicalClock = saturn_utilities:now_microsec(),
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            {ok, BucketSource} = groups_manager:get_bucket_sample(MyId, Manager#state_manager.groups),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=all, bucket_source=BucketSource, client=From, type_call=Type}),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=Type}),
             saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
             {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
