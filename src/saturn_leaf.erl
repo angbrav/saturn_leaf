@@ -6,6 +6,8 @@
          ping/0,
          update/3,
          read/2,
+         async_read/3,
+         async_update/4,
          spawn_wrapper/4
         ]).
 
@@ -29,6 +31,18 @@ read({Bucket, Key}, Clock) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:read(IndexNode, {Bucket, Key}, Clock).
+
+async_update({Bucket, Key}, Value, Clock, Client) ->
+    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:async_update(IndexNode, {Bucket, Key}, Value, Clock, Client).
+    
+async_read({Bucket, Key}, Clock, Client) ->
+    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:async_read(IndexNode, {Bucket, Key}, Clock, Client).
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),

@@ -44,5 +44,11 @@
 
 -record(payload_remote, {to :: all | non_neg_integer(),
                          bucket_source,
-                         client
+                         client,
+                         type_call
                         }).
+
+-record(state_manager, {tree,
+                        groups,
+                        paths,
+                        nleaves}).

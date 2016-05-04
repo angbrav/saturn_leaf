@@ -1,4 +1,4 @@
--module(three_nodes_eventual_test).
+-module(three_nodes_async_eventual_test).
 
 -export([confirm/0,
          three_sequential_writes_test/3]).
@@ -26,6 +26,10 @@ confirm() ->
     pong = rpc:call(Leaf1, net_adm, ping, [Leaf2]),
     pong = rpc:call(Leaf1, net_adm, ping, [Leaf3]),
     pong = rpc:call(Leaf2, net_adm, ping, [Leaf3]),
+
+    pong = net_adm:ping(Leaf1),
+    pong = net_adm:ping(Leaf2),
+    pong = net_adm:ping(Leaf3),
 
     rt:wait_for_service(Leaf1, saturn_proxy),
     rt:wait_for_service(Leaf2, saturn_proxy),

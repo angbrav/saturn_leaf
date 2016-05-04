@@ -32,7 +32,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([get_receivers/1,
-         assign_convergers/1]).
+         set_tree/3,
+         set_groups/2,
+         assign_convergers/2]).
 
 -record(state, {nodes,
                 scattered_receivers,
@@ -46,8 +48,14 @@ start_link(MyId) ->
 get_receivers(MyId) ->
     gen_server:call({global, reg_name(MyId)}, get_receivers, infinity).
 
-assign_convergers(MyId) ->
-    gen_server:call({global, reg_name(MyId)}, assign_convergers, infinity).
+assign_convergers(MyId, NLeaves) ->
+    gen_server:call({global, reg_name(MyId)}, {assign_convergers, NLeaves}, infinity).
+
+set_tree(MyId, Tree, NLeaves) ->
+    gen_server:call({global, reg_name(MyId)}, {set_tree, Tree, NLeaves}, infinity).
+
+set_groups(MyId, Groups) ->
+    gen_server:call({global, reg_name(MyId)}, {set_groups, Groups}, infinity).
 
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
@@ -55,33 +63,46 @@ init([MyId]) ->
     Convergers = [list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_leaf_converger)) || Node <- Nodes],
     {ok, #state{myid=MyId, nodes=Convergers}}.
 
-handle_call(assign_convergers, _From, S0=#state{myid=MyId}) ->
-    case groups_manager_serv:get_all_nodes() of
-        {ok, []} ->
-            lager:error("No no other nodes information", []),
-            {reply, ok, S0};
-        {ok, Group0} ->
-            Group1 = lists:delete(MyId, Group0),
-            Convergers1 = lists:foldl(fun(Id, Acc) ->
-                            {ok, Receivers} = saturn_leaf_receiver:get_receivers(Id),
-                            dict:store(Id, Receivers, Acc)
-                          end, dict:new(), Group1),
-            {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-            GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-            {Dict, _} = lists:foldl(fun(PrefList, {Acc, N}) ->
-                                        D = lists:foldl(fun(Id, D0) ->
-                                                            ConvId = dict:fetch(Id, Convergers1),
-                                                            Entry = (N rem length(ConvId)) + 1,
-                                                            dict:store(Id, lists:nth(Entry, ConvId), D0)
-                                                        end, dict:new(), dict:fetch_keys(Convergers1)),
-                                        ok = saturn_proxy_vnode:set_receivers(hd(PrefList), D),
-                                        {dict:store(hd(PrefList), D, Acc), N+1}
-                                    end, {dict:new(), 1}, GrossPrefLists),
-            {reply, ok, S0#state{scattered_receivers=Dict}}
-    end;
+handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
+    Group0 = lists:seq(0, NLeaves-1),
+    Group1 = lists:delete(MyId, Group0),
+    Convergers1 = lists:foldl(fun(Id, Acc) ->
+                                {ok, Receivers} = saturn_leaf_receiver:get_receivers(Id),
+                                dict:store(Id, Receivers, Acc)
+                              end, dict:new(), Group1),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    {Dict, _} = lists:foldl(fun(PrefList, {Acc, N}) ->
+                                D = lists:foldl(fun(Id, D0) ->
+                                                    ConvId = dict:fetch(Id, Convergers1),
+                                                    Entry = (N rem length(ConvId)) + 1,
+                                                    dict:store(Id, lists:nth(Entry, ConvId), D0)
+                                                end, dict:new(), dict:fetch_keys(Convergers1)),
+                                ok = saturn_proxy_vnode:set_receivers(hd(PrefList), D),
+                                true = saturn_proxy_vnode:set_myid(hd(PrefList), MyId),
+                                {dict:store(hd(PrefList), D, Acc), N+1}
+                            end, {dict:new(), 1}, GrossPrefLists),
+    {reply, ok, S0#state{scattered_receivers=Dict}};
 
 handle_call(get_receivers, _From, S0=#state{nodes=Nodes}) ->
-    {reply, {ok, Nodes}, S0}.
+    {reply, {ok, Nodes}, S0};
+
+handle_call({set_tree, Tree, Leaves}, _From, S0) ->
+    Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:set_tree(hd(PrefList), Paths, Tree, Leaves)
+                  end, GrossPrefLists),
+    {reply, ok, S0};
+
+handle_call({set_groups, RGroups}, _From, S0) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:set_groups(hd(PrefList), RGroups)
+                  end, GrossPrefLists),
+    {reply, ok, S0}.
 
 handle_cast(_Info, State) ->
     {noreply, State}.
