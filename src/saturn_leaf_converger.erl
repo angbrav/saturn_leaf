@@ -43,28 +43,31 @@ start_link() ->
 
 handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
-    gen_server:call({global, Name}, Message, infinity).
+    gen_server:cast({global, Name}, Message).
 
 init([]) ->
     {ok, #state{labels_queue=queue:new(),
                 ops_dict=dict:new()}}.
 
-handle_call({new_operation, Label, Value}, _From, S0) ->
+handle_cast({new_operation, Label, Value}, S0) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     ok = execute_operation(Label, Value),
-    {reply, ok, S0};
+    {noreply, S0};
 
-handle_call({remote_read, Label}, _From, S0) ->
+handle_cast({remote_read, Label}, S0) ->
     %lager:info("Remote read received. Label: ~p", [Label]),
     BKey = Label#label.bkey,
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:remote_read(IndexNode, Label),
-    {reply, ok, S0}.
+    {noreply, S0};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_call(_Info, _From, State) ->
+    {reply, error, State}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
