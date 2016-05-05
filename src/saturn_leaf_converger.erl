@@ -42,49 +42,52 @@ start_link() ->
 
 handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
-    gen_server:call({global, Name}, Message, infinity).
+    gen_server:cast({global, Name}, Message).
 
 init([]) ->
     {ok, #state{pending_id=0}}.
 
-handle_call({new_operation, Label, Value}, _From, S0=#state{pending_id=PId0}) ->
+handle_cast({new_operation, Label, Value}, S0=#state{pending_id=PId0}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_cops_vnode:update(IndexNode, PId0, Label, Value),
     PId1 = PId0 + 1,
-    {reply, ok, S0#state{pending_id=PId1}};
+    {noreply, S0#state{pending_id=PId1}};
 
-handle_call({remote_update, Label, Value}, _From, S0=#state{pending_id=PId0}) ->
+handle_cast({remote_update, Label, Value}, S0=#state{pending_id=PId0}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_cops_vnode:remote_update(IndexNode, PId0, Label, Value),
     PId1 = PId0 + 1,
-    {reply, ok, S0#state{pending_id=PId1}};
+    {noreply, S0#state{pending_id=PId1}};
 
-handle_call({remote_read, Label}, _From, S0=#state{pending_id=PId0}) ->
+handle_cast({remote_read, Label}, S0=#state{pending_id=PId0}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_cops_vnode:remote_read(IndexNode, PId0, Label),
     PId1 = PId0 + 1,
-    {reply, ok, S0#state{pending_id=PId1}};
+    {noreply, S0#state{pending_id=PId1}};
 
-handle_call({remote_reply, Label}, _From, S0=#state{pending_id=PId0}) ->
+handle_cast({remote_reply, Label}, S0=#state{pending_id=PId0}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
     DocIdx = riak_core_util:chash_key({?BUCKET_COPS, PId0}),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_cops_vnode:remote_reply(IndexNode, PId0, Label),
     PId1 = PId0 + 1,
-    {reply, ok, S0#state{pending_id=PId1}}.
+    {noreply, S0#state{pending_id=PId1}};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_call(_Info, _From, State) ->
+    {reply, error, State}.
 
 handle_info(_Info, State) ->
     {noreply, State}.
