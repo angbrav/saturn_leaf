@@ -46,6 +46,7 @@ handle(update, [BKey, Value, Clock]) ->
 
 init([]) ->
     lager:info("Client receiver started at ~p", [reg_name()]),
+    process_flag(trap_exit, true),
     {ok, nostate}.
 
 handle_call({read, BKey, Clock}, From, S0) ->
