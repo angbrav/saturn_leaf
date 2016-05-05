@@ -36,7 +36,7 @@
 reg_name() -> list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)). 
 
 start_link() ->
-    gen_server:start({global, reg_name()}, ?MODULE, [], []).
+    gen_server:start_link({global, reg_name()}, ?MODULE, [], []).
 
 handle(read, [BKey, Clock]) ->
     gen_server:call({global, reg_name()}, {read, BKey, Clock}, infinity);
