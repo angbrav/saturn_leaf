@@ -47,10 +47,11 @@
          remote_update/4,
          remote_reply/3,
          deps_checked/2,
+         clean_state/1,
          check_ready/1]).
 
--record(state, {ops :: dict(),
-                values :: dict(),
+-record(state, {ops,
+                values,
                 partition}).
 
 %% API
@@ -87,6 +88,11 @@ deps_checked(Node, Id) ->
                                    {fsm, undefined, self()},
                                    ?COPS_MASTER).
 
+clean_state(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        clean_state,
+                                        ?PROXY_MASTER).
+
 %% @doc The table holding the prepared transactions is shared with concurrent
 %%      readers, so they can safely check if a key they are reading is being updated.
 %%      This function checks whether or not all tables have been intialized or not yet.
@@ -120,6 +126,16 @@ init([Partition]) ->
                 ops=Ops,
                 values=Values 
                }}.
+
+handle_command(clean_state, _Sender, S0=#state{partition=Partition, ops=Ops0, values=Values0}) ->
+    true = ets:delete(Ops0),
+    true = ets:delete(Values0),
+    Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(ops_cops)),
+    Ops = ets:new(Name1, [set, named_table]),
+    Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(values_cops)),
+    Values = ets:new(Name2, [set, named_table]),
+    {reply, ok, S0#state{ops=Ops,
+                       values=Values}};
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};

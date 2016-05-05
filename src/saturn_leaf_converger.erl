@@ -31,7 +31,8 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([handle/2]).
+-export([handle/2,
+         clean_state/1]).
 
 -record(state, {pending_id}).
                
@@ -43,6 +44,11 @@ start_link() ->
 handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
     gen_server:cast({global, Name}, Message).
+
+clean_state(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        clean_state,
+                                        ?PROXY_MASTER).
 
 init([]) ->
     {ok, #state{pending_id=0}}.
@@ -85,6 +91,9 @@ handle_cast({remote_reply, Label}, S0=#state{pending_id=PId0}) ->
 
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_call(clean_state, _From, _S0) ->
+    {reply, ok, #state{pending_id=0}};
 
 handle_call(_Info, _From, State) ->
     {reply, error, State}.

@@ -55,6 +55,7 @@
          set_tree/4,
          set_groups/2,
          set_myid/2,
+         clean_state/1,
          check_ready/1]).
 
 -record(state, {partition,
@@ -146,12 +147,17 @@ set_groups(Node, Groups) ->
                                         {set_groups, Groups},
                                         ?PROXY_MASTER).
 
+clean_state(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        clean_state,
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
-    KeyDeps = ets:new(Name1, [set, named_table]),
+    KeyDeps = ets:new(Name1, [set, named_table, private]),
     Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
-    RestDeps = ets:new(Name2, [set, named_table]),
+    RestDeps = ets:new(Name2, [set, named_table, private]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
@@ -187,6 +193,20 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
             false
     end.
 
+
+handle_command(clean_state, _Sender, S0=#state{partition=Partition, key_deps=KeyDeps0, rest_deps=RestDeps0, connector=Connector0}) ->
+    true = ets:delete(KeyDeps0),
+    true = ets:delete(RestDeps0),
+    Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
+    KeyDeps = ets:new(Name1, [set, named_table, private]),
+    Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
+    RestDeps = ets:new(Name2, [set, named_table, private]),
+    Connector = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
+    {reply, ok, S0#state{last_label=none,
+                       key_deps=KeyDeps,
+                       max_ts=0,
+                       rest_deps=RestDeps,
+                       connector=Connector}};
 
 handle_command({set_myid, MyId}, _Sender, S0) ->
     {reply, true, S0#state{myid=MyId}};

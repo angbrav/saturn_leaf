@@ -8,7 +8,8 @@
          read/2,
          async_update/4,
          async_read/3,
-         spawn_wrapper/4
+         spawn_wrapper/4,
+         clean_state/1
         ]).
 
 %% Public API
@@ -47,3 +48,17 @@ async_read({Bucket, Key}, Clock, Client) ->
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),
     Pid ! Result.
+
+clean_state(MyId) ->
+    {ok, Convergers} = saturn_leaf_receiver:get_receivers(MyId), 
+    lists:foreach(fun(Converger) ->
+                    ok = saturn_leaf_converger:clean_state(Converger)
+                  end, Convergers),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:clean_state(hd(PrefList)),
+                    ok = saturn_cops_vnode:clean_state(hd(PrefList))
+                  end, GrossPrefLists),
+    ok.
+    
