@@ -251,7 +251,13 @@ handle_pending_op(Id, Label, Values) ->
                 Client = Payload#payload_reply.client,
                 Value = Payload#payload_reply.value,
                 Deps = Payload#payload_reply.deps,
-                riak_core_vnode:reply(Client, {ok, {Value, Deps}}),
+                TypeCall = Payload#payload_reply.type_call,
+                case TypeCall of
+                    sync ->
+                        riak_core_vnode:reply(Client, {ok, {Value, Deps}});
+                    async ->
+                        gen_server:reply(Client, {ok, {Value, Deps}})
+                end,
                 ok;
         remote_update ->
                 case ets:lookup(Values, Id) of
@@ -262,7 +268,8 @@ handle_pending_op(Id, Label, Values) ->
                     Payload = Label#label.payload,
                     Client = Payload#payload_remote_update.client,
                     Deps = Payload#payload_remote_update.deps,
-                    saturn_proxy_vnode:remote_update(IndexNode, BKey, Value, Deps, Client),
+                    TypeCall = Payload#payload_remote_update.type_call,
+                    saturn_proxy_vnode:remote_update(IndexNode, BKey, Value, Deps, Client, TypeCall),
                     true = ets:delete(Values, Id),
                     ok
             end;

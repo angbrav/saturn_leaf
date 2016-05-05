@@ -14,7 +14,7 @@ confirm() ->
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
     ]),
-    Clusters = [Cluster1, Cluster2, Cluster3] = rt:build_clusters([1, 1, 1]),
+    _Clusters = [Cluster1, Cluster2, Cluster3] = rt:build_clusters([1, 1, 1]),
 
     lager:info("Waiting for ring to converge."),
     rt:wait_until_ring_converged(Cluster1),
@@ -29,6 +29,23 @@ confirm() ->
     pong = rpc:call(Leaf1, net_adm, ping, [Leaf3]),
     pong = rpc:call(Leaf2, net_adm, ping, [Leaf3]),
 
+    rt:wait_for_service(Leaf1, saturn_proxy),
+    rt:wait_for_service(Leaf2, saturn_proxy),
+    rt:wait_for_service(Leaf3, saturn_proxy),
+    
+    %% Starting leaf1
+    {ok, _HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
+    %% Starting leaf2
+    {ok, _HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
+    %% Starting leaf3
+    {ok, _HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
+    
+    timer:sleep(1000),
+        
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0, 3]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 3]),
+    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2, 3]),
+
     Tree0 = dict:store(0, [-1, 300, 80], dict:new()),
     Tree1 = dict:store(1, [300, -1, 70], Tree0),
     Tree2 = dict:store(2, [80, 70, -1], Tree1),
@@ -37,41 +54,14 @@ confirm() ->
     Groups1 = dict:store(2, [0, 1, 2], Groups0),
     Groups2 = dict:store(3, [0, 1], Groups1),
 
-    ok = common_rt:set_tree_clusters(Clusters, Tree2, 2),
-    ok = common_rt:set_groups_clusters(Clusters, Groups2), 
+    ok = rpc:call(Leaf1, saturn_leaf_receiver, set_tree, [0, Tree2, 3]),
+    ok = rpc:call(Leaf1, saturn_leaf_receiver, set_groups, [0, Groups2]),
 
-    rt:wait_for_service(Leaf1, saturn_proxy),
-    rt:wait_for_service(Leaf2, saturn_proxy),
-    rt:wait_for_service(Leaf3, saturn_proxy),
-    
-    %% Starting leaf1
-    {ok, HostPortLeaf1}=rpc:call(Leaf1, saturn_leaf_sup, start_leaf, [4040, 0]),
-    %% Starting leaf2
-    {ok, HostPortLeaf2}=rpc:call(Leaf2, saturn_leaf_sup, start_leaf, [4041, 1]),
-    %% Starting leaf3
-    {ok, HostPortLeaf3}=rpc:call(Leaf3, saturn_leaf_sup, start_leaf, [4042, 2]),
-    
-    timer:sleep(1000),
-        
-    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0]),
-    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1]),
-    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2]),
+    ok = rpc:call(Leaf2, saturn_leaf_receiver, set_tree, [1, Tree2, 3]),
+    ok = rpc:call(Leaf2, saturn_leaf_receiver, set_groups, [1, Groups2]),
 
-    lager:info("Waiting until vnodes are started up"),
-    rt:wait_until(hd(Cluster1),fun wait_init:check_ready/1),
-    rt:wait_until(hd(Cluster2),fun wait_init:check_ready/1),
-    rt:wait_until(hd(Cluster3),fun wait_init:check_ready/1),
-    lager:info("Vnodes are started up"),
-  
-
-    ok = common_rt:new_node_cluster(Cluster1, 1, HostPortLeaf2),
-    ok = common_rt:new_node_cluster(Cluster1, 2, HostPortLeaf3),
-
-    ok = common_rt:new_node_cluster(Cluster2, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster2, 2, HostPortLeaf3),
-
-    ok = common_rt:new_node_cluster(Cluster3, 0, HostPortLeaf1),
-    ok = common_rt:new_node_cluster(Cluster3, 1, HostPortLeaf2),
+    ok = rpc:call(Leaf3, saturn_leaf_receiver, set_tree, [2, Tree2, 3]),
+    ok = rpc:call(Leaf3, saturn_leaf_receiver, set_groups, [2, Groups2]),
 
     sequential_writes_test(Leaf1, Leaf2, Leaf3),
     remote_read_test(Leaf1, Leaf2, Leaf3),

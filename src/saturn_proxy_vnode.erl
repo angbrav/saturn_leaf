@@ -44,13 +44,17 @@
 
 -export([read/3,
          update/4,
+         async_read/4,
+         async_update/5,
          propagate/4,
-         heartbeat/2,
          remote_read/2,
-         remote_update/5,
+         remote_update/6,
          check_deps/3,
          last_label/1,
          set_receivers/2,
+         set_tree/4,
+         set_groups/2,
+         set_myid/2,
          check_ready/1]).
 
 -record(state, {partition,
@@ -60,6 +64,7 @@
                 key_deps,
                 receivers,
                 rest_deps,
+                manager,
                 myid}).
 
 %% API
@@ -85,6 +90,18 @@ update(Node, BKey, Value, Clock) ->
                                         {update, BKey, Value, Clock},
                                         ?PROXY_MASTER).
 
+async_read(Node, BKey, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_read, BKey, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+async_update(Node, BKey, Value, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_update, BKey, Value, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
 propagate(Node, BKey, Value, Metadata) ->
     riak_core_vnode_master:command(Node,
                                    {propagate, BKey, Value, Metadata},
@@ -97,9 +114,9 @@ remote_read(Node, Label) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-remote_update(Node, Label, Value, Deps, Client) ->
+remote_update(Node, Label, Value, Deps, Client, TypeCall) ->
     riak_core_vnode_master:command(Node,
-                                   {remote_update, Label, Value, Deps, Client},
+                                   {remote_update, Label, Value, Deps, Client, TypeCall},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -109,28 +126,39 @@ check_deps(Node, Id, Deps) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-heartbeat(Node, MyId) ->
-    riak_core_vnode_master:command(Node,
-                                   {heartbeat, MyId},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
-
 set_receivers(Node, Receivers) ->
     riak_core_vnode_master:sync_command(Node,
                                         {set_receivers, Receivers},
                                         ?PROXY_MASTER).
 
+set_myid(Node, MyId) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_myid, MyId},
+                                        ?PROXY_MASTER).
+
+set_tree(Node, Paths, Tree, NLeaves) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_tree, Paths, Tree, NLeaves},
+                                        ?PROXY_MASTER).
+
+set_groups(Node, Groups) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {set_groups, Groups},
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
-    lager:info("Vnode init"),
+    Manager = groups_manager:init_state(integer_to_list(Partition)),
     Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
     KeyDeps = ets:new(Name1, [set, named_table]),
     Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
     RestDeps = ets:new(Name2, [set, named_table]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 last_label=none,
                 key_deps=KeyDeps,
                 max_ts=0,
+                manager=Manager,
                 rest_deps=RestDeps,
                 connector=Connector
                }}.
@@ -159,16 +187,24 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
             false
     end.
 
-handle_command({check_myid_ready}, _Sender, S0) ->
-    S1 = check_myid(S0),
-    {reply, true, S1};
+
+handle_command({set_myid, MyId}, _Sender, S0) ->
+    {reply, true, S0#state{myid=MyId}};
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=KeyDeps, rest_deps=Rest}) ->
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager}) ->
+    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}}};
+
+handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
+    Table = Manager#state_manager.groups,
+    ok = groups_manager:set_groups(Table, Groups),
+    {reply, ok, S0};
+
+handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key_deps=KeyDeps, rest_deps=Rest, manager=Manager, myid=MyId}) ->
     R = lists:foldl(fun({BKey, Version}, Total) ->
-                        case groups_manager_serv:do_replicate(BKey) of
+                        case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
                             true ->
                                 {ok, {_Value, {VerRead, _D}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
                                 case Version =< VerRead of
@@ -200,43 +236,61 @@ handle_command({check_deps, Id, Deps}, _From, S0=#state{connector=Connector, key
             {noreply, S0}
     end; 
 
-handle_command({read, BKey, Deps}, From, S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers}) ->
-    case groups_manager_serv:get_closest_dcid(BKey) of
-        {ok, MyId} ->
-            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+handle_command({read, BKey, Deps}, From, S0) ->
+    case do_read(sync, BKey, Deps, From, S0) of
+        {ok, Value} ->
             {reply, {ok, Value}, S0};
-        {ok, Id} ->
-            %Remote read
-            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps}),
-            Receiver = dict:fetch(Id, Receivers),
-            saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
+        remote ->
             {noreply, S0};
         {error, Reason} ->
-            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason]),
             {reply, {error, Reason}, S0}
     end;
 
-handle_command({update, BKey, Value, Deps}, From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0}) ->
-    case groups_manager_serv:get_closest_dcid(BKey) of
-        {ok, MyId} ->
-            {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers),
-            {reply, {ok, Version}, S0#state{connector=Connector1}};
-        {ok, Id} ->
-            Label = create_label(remote_update, BKey, none, {Partition, node()}, MyId, #payload_remote_update{deps=Deps, client=From}),
-            Receiver = dict:fetch(Id, Receivers),
-            saturn_leaf_converger:handle(Receiver, {remote_update, Label, Value}),
+handle_command({async_read, BKey, Deps, Client}, _From, S0) ->
+    case do_read(async, BKey, Deps, Client, S0) of
+        {ok, Value} ->  
+            gen_server:reply(Client, {ok, Value}),
             {noreply, S0};
-        {error, Reason1} ->
-            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason1]),
-            {reply, {error, Reason1}, S0}
+        remote ->
+            {noreply, S0};
+        {error, Reason} ->
+            gen_server:reply(Client, {error, Reason}),
+            {noreply, S0}
+    end;
+
+handle_command({update, BKey, Value, Deps}, From, S0) ->
+    case do_update(sync, BKey, Value, Deps, From, S0) of
+        {ok, Version, S1} ->
+            {reply, {ok, Version}, S1};
+        remote ->
+            {noreply, S0};
+        {error, Reason} ->
+            {reply, {error, Reason}, S0}
+    end;
+
+handle_command({async_update, BKey, Value, Deps, Client}, _From, S0) ->
+    case do_update(async, BKey, Value, Deps, Client, S0) of
+        {ok, Version, S1} ->
+            gen_server:reply(Client, {ok, Version}),
+            {noreply, S1};
+        remote ->
+            {noreply, S0};
+        {error, Reason} ->
+            gen_server:reply(Client, {error, Reason}),
+            {noreply, S0}
     end;
 
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
-handle_command({remote_update, BKey, Value, Deps, Client}, _From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0}) ->
-    {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers),
-    riak_core_vnode:reply(Client, {ok, Version}),
+handle_command({remote_update, BKey, Value, Deps, Client, TypeCall}, _From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0, manager=Manager}) ->
+    {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers, Manager),
+    case TypeCall of
+        sync ->
+            riak_core_vnode:reply(Client, {ok, Version});
+        async ->
+            gen_server:reply(Client, {ok, Version})
+    end,
     {noreply, S0#state{connector=Connector1}};
 
 handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps, rest_deps=RestDeps}) ->
@@ -262,16 +316,11 @@ handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, myid=
     Sender = Label#label.sender,
     {ok, {Value,{Version, Deps}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
     Client = Payload#payload_remote.client,
-    NewLabel = create_label(remote_reply, BKey, Version, {Partition, node()}, MyId, #payload_reply{value=Value, deps=Deps, client=Client}),
+    TypeCall = Payload#payload_remote.type_call,
+    NewLabel = create_label(remote_reply, BKey, Version, {Partition, node()}, MyId, #payload_reply{value=Value, deps=Deps, client=Client, type_call=TypeCall}),
     Receiver = dict:fetch(Sender, Receivers),
     saturn_leaf_converger:handle(Receiver, {remote_reply, NewLabel}),
     {noreply, S0};
-
-handle_command({heartbeat, MyId}, _From, S0=#state{partition=Partition, max_ts=MaxTS0}) ->
-    Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
-    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
-    %riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, {heartbeat, MyId}),
-    {noreply, S0#state{myid=MyId, max_ts=Clock}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
@@ -313,17 +362,6 @@ handle_exit(_Pid, _Reason, State) ->
 terminate(_Reason, _State) ->
     ok.
 
-check_myid(S0) ->
-    Value = riak_core_metadata:get(?MYIDPREFIX, ?MYIDKEY),
-    case Value of
-        undefined ->
-            timer:sleep(100),
-            check_myid(S0);
-        MyId ->
-            groups_manager_serv:set_myid(MyId),
-            S0#state{myid=MyId}
-    end.
-    
 create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
     #label{operation=Operation,
            bkey=BKey,
@@ -356,7 +394,42 @@ handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, KeyDeps, Rest
             true = ets:insert(KeyDeps, {BKey, Orddict})
     end.
 
-do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers) ->
+do_read(Type, BKey, Deps, From, _S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers, manager=Manager}) ->
+    Groups = Manager#state_manager.groups,
+    Tree = Manager#state_manager.tree,
+    case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
+        {ok, MyId} ->
+            {ok, Value} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+            {ok, Value};
+        {ok, Id} ->
+            %Remote read
+            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps, type_call=Type}),
+            Receiver = dict:fetch(Id, Receivers),
+            saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
+            remote;
+        {error, Reason} ->
+            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason]),
+            {error, Reason}
+    end.
+
+do_update(Type, BKey, Value, Deps, From, S0=#state{partition=Partition, myid=MyId, receivers=Receivers, key_deps=KeyDeps, rest_deps=RestDeps, connector=Connector0, manager=Manager}) ->
+    Groups = Manager#state_manager.groups,
+    Tree = Manager#state_manager.tree,
+    case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
+        {ok, MyId} ->
+            {Version, Connector1} = do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers, Manager),
+            {ok, Version, S0#state{connector=Connector1}};
+        {ok, Id} ->
+            Label = create_label(remote_update, BKey, none, {Partition, node()}, MyId, #payload_remote_update{deps=Deps, client=From, type_call=Type}),
+            Receiver = dict:fetch(Id, Receivers),
+            saturn_leaf_converger:handle(Receiver, {remote_update, Label, Value}),
+            remote;
+        {error, Reason1} ->
+            lager:error("BKey ~p ~p is not replicated",  [BKey, Reason1]),
+            {error, Reason1}
+    end.
+
+do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receivers, Manager) ->
     {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
     Version = OldVersion + 1,
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, {Version, Deps}}),
@@ -367,7 +440,7 @@ do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receiv
             handle_pending_deps(Orddict0, BKey, Version, KeyDeps, RestDeps)
     end,
     Label = create_label(update, BKey, Version, {Partition, node()}, MyId, Deps),
-    case groups_manager_serv:get_datanodes_ids(BKey) of
+    case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
                 Receiver = dict:fetch(Id, Receivers),

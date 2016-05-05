@@ -45,26 +45,9 @@ start_leaf(Port, MyId) ->
 
     riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
 
-    case ?PROPAGATION_MODE of
-        short_tcp ->
-            supervisor:start_child(?MODULE, {saturn_leaf_tcp_recv_fsm,
-                    {saturn_leaf_tcp_recv_fsm, start_link, [Port, saturn_leaf_converger, MyId]},
-                    permanent, 5000, worker, [saturn_leaf_tcp_recv_fsm]}),
-
-            supervisor:start_child(?MODULE, {saturn_leaf_tcp_connection_handler_fsm_sup,
-                    {saturn_leaf_tcp_connection_handler_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [saturn_leaf_tcp_connection_handler_fsm_sup]});
-
-        _ ->
-            noop
-    end,
     supervisor:start_child(?MODULE, {saturn_leaf_receiver,
                     {saturn_leaf_receiver, start_link, [MyId]},
                     permanent, 5000, worker, [saturn_leaf_receiver]}),
-
-    supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, [MyId]},
-                    permanent, 5000, worker, [saturn_leaf_producer]}),
 
     {ok, {Host, Port}}.
 
@@ -76,13 +59,13 @@ init(_Args) ->
     ProxyMaster = {?PROXY_MASTER,
                   {riak_core_vnode_master, start_link, [saturn_proxy_vnode]},
                   permanent, 5000, worker, [riak_core_vnode_master]},
-    PropagatorSup = {saturn_leaf_propagation_fsm_sup,
-                    {saturn_leaf_propagation_fsm_sup, start_link, []},
-                    permanent, 5000, supervisor, [saturn_leaf_propagation_fsm_sup]},
     Converger = {saturn_leaf_converger,
                 {saturn_leaf_converger, start_link, []},
                 permanent, 5000, worker, [saturn_leaf_converger]},
-    Childs0 = [ProxyMaster, PropagatorSup, Converger],
+    ClientReceiver = {saturn_client_receiver,
+                     {saturn_client_receiver, start_link, []},
+                     permanent, 5000, worker, [saturn_client_receiver]},
+    Childs0 = [ProxyMaster, Converger, ClientReceiver],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,

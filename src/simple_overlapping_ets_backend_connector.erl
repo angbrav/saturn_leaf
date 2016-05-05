@@ -37,7 +37,7 @@ read(ETS, Payload)->
     {BKey} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
-            {ok, {empty, 0}};
+            {ok, {empty, ?DEFAULT_METADATA}};
         [{BKey, Value}] ->
             {ok, Value}
     end.
