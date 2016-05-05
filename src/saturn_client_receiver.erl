@@ -62,7 +62,8 @@ handle_cast(_Info, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    lager:error("Client receiver terminated with reason ~p", [Reason]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
