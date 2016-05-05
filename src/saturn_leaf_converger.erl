@@ -45,10 +45,8 @@ handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
     gen_server:cast({global, Name}, Message).
 
-clean_state(Node) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        clean_state,
-                                        ?PROXY_MASTER).
+clean_state(Name) ->
+    gen_server:cast({global, Name}, clean_state).
 
 init([]) ->
     {ok, #state{pending_id=0}}.
