@@ -377,15 +377,15 @@ handle_pending_deps([], BKey, _Version, KeyDeps, _RestDeps) ->
 handle_pending_deps([{PVersion, Ids}|Rest]=Orddict, BKey, Version, KeyDeps, RestDeps) ->
     case PVersion =< Version of
         true ->
-            lists:foreach(fun(Id, Acc) ->
-                            case dict:fetch(Id, Acc) of
-                                1 ->
+            lists:foreach(fun(Id) ->
+                            case ets:lookup(RestDeps, Id) of
+                                [{Id, 1}] ->
                                     DocIdx = riak_core_util:chash_key({?BUCKET_COPS, Id}),
                                     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?COPS_SERVICE),
                                     [{IndexNode, _Type}] = PrefList,
                                     saturn_cops_vnode:deps_checked(IndexNode, Id),
                                     true = ets:delete(RestDeps, Id);
-                                Left ->
+                                [{Id, Left}] ->
                                     true = ets:insert(RestDeps, {Id, Left-1})
                             end
                           end, Ids),
