@@ -36,17 +36,16 @@
 reg_name() -> list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)). 
 
 start_link() ->
-    gen_server:start_link({global, reg_name()}, ?MODULE, [], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 handle(read, [BKey, Clock]) ->
-    gen_server:call({global, reg_name()}, {read, BKey, Clock}, infinity);
+    gen_server:call({local, ?MODULE}, {read, BKey, Clock}, infinity);
 
 handle(update, [BKey, Value, Clock]) ->
-    gen_server:call({global, reg_name()}, {update, BKey, Value, Clock}, infinity).
+    gen_server:call({local, ?MODULE}, {update, BKey, Value, Clock}, infinity).
 
 init([]) ->
     lager:info("Client receiver started at ~p", [reg_name()]),
-    process_flag(trap_exit, true),
     {ok, nostate}.
 
 handle_call({read, BKey, Clock}, From, S0) ->
