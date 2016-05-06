@@ -57,8 +57,7 @@ clean(MyId) ->
     ok.
 
 collect_stats(MyId, NLeaves) ->
-    ok = saturn_leaf_converger:dump_stats(MyId, NLeaves),
-    ok.
+    saturn_leaf_converger:dump_stats(MyId, NLeaves).
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),

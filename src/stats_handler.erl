@@ -32,7 +32,7 @@ compute_averages(Table, NLeaves) ->
                                 [] ->
                                     Acc;
                                 [{Sender, {SUpdates, TUpdates, SRemotes, TRemotes}}] ->
-                                    dict:store(Sender, {{updates, trunc(SUpdates/TUpdates)}, {remote_reads, trunc(SRemotes/TRemotes)}})
+                                    dict:store(Sender, {{updates, trunc(SUpdates/TUpdates*1000)}, {remote_reads, trunc(SRemotes/TRemotes*1000)}}, Acc)
                             end
-                         end, dict:new(), lists:seq(0,NLeaves-1)),
+                         end, dict:new(), lists:seq(0, NLeaves-1)),
     Result.
