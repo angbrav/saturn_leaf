@@ -9,6 +9,7 @@
          async_read/3,
          async_update/4,
          clean/1,
+         collect_stats/1,
          spawn_wrapper/4
         ]).
 
@@ -53,6 +54,11 @@ clean(MyId) ->
     lists:foreach(fun(PrefList) ->
                     ok = saturn_proxy_vnode:clean_state(hd(PrefList))
                   end, GrossPrefLists),
+    ok.
+
+collect_stats(MyId) ->
+    ok = saturn_leaf_producer:dump_stats(MyId), 
+    ok = saturn_leaf_converger:dump_stats(MyId),
     ok.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
