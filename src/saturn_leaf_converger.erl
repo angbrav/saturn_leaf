@@ -93,7 +93,7 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, que
     %{noreply, S0};
 
 handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId, staleness=Staleness}) ->
-    %lager:info("New operation received. Label: ~p", [Label]),
+    lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
             stats_handler:add_update(Staleness, Label),
