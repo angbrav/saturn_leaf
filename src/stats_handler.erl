@@ -4,7 +4,7 @@
 
 -export([add_remote/2,
          add_update/2,
-         compute_averages/2]).
+         compute_averages/1]).
 
 add_remote(Table, Label) ->
     Sender = Label#label.sender,
@@ -25,18 +25,24 @@ add_update(Table, Label) ->
         [{Sender, {SUpdates, TUpdates, SRemotes, TRemotes}}] ->
             ets:insert(Table, {Sender, {SUpdates+Dif, TUpdates+1, SRemotes, TRemotes}})
     end.
+compute_averages(Table) ->
+    compute_averages_internal(ets:first(Table), Table, dict:new()).
 
-compute_averages(Table, NLeaves) ->
-    Result = lists:foldl(fun(Sender, Acc) ->
-                            case ets:lookup(Table, Sender) of
-                                [] ->
-                                    Acc;
-                                [{Sender, {_, 0, SRemotes, TRemotes}}] ->
-                                    dict:store(Sender, {{remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc);
-                                [{Sender, {SUpdates, TUpdates, _, 0}}] ->
-                                    dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}}, Acc);
-                                [{Sender, {SUpdates, TUpdates, SRemotes, TRemotes}}] ->
-                                    dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}, {remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc)
-                            end
-                         end, dict:new(), lists:seq(0, NLeaves-1)),
-    Result.
+compute_averages_internal('$end_of_table', _Table, Dict) ->
+    Dict;
+    
+compute_averages_internal(Sender, Table, Dict) ->
+    case ets:lookup(Table, Sender) of
+        [{Sender, {_, 0, SRemotes, TRemotes}}] ->
+            Dict1 = dict:store(Sender, {{remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Dict),
+            compute_averages_internal(ets:next(Table, Sender), Table, Dict1);
+        [{Sender, {SUpdates, TUpdates, _, 0}}] ->
+            Dict1 = dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}}, Dict),
+            compute_averages_internal(ets:next(Table, Sender), Table, Dict1);
+        [{Sender, {SUpdates, TUpdates, SRemotes, TRemotes}}] ->
+            Dict1 = dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}, {remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Dict),
+            compute_averages_internal(ets:next(Table, Sender), Table, Dict1);
+        [Else] ->
+            lager:error("Something is wrong with the stat format: ~p", [Else]),
+            compute_averages_internal(ets:next(Table, Sender), Table, Dict)
+    end.

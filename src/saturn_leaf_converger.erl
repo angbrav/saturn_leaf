@@ -34,7 +34,7 @@
 -export([handle/2,
          clean_state/1,
          flush_list/4,
-         dump_stats/2,
+         dump_stats/1,
          flush_queue/5]).
 
 -record(state, {labels_queue :: queue(),
@@ -55,8 +55,8 @@ handle(MyId, Message) ->
 clean_state(MyId) ->
     gen_server:call({global, reg_name(MyId)}, clean_state, infinity).
 
-dump_stats(MyId, Leaves) ->
-    gen_server:call({global, reg_name(MyId)}, {dump_stats, Leaves}, infinity).
+dump_stats(MyId) ->
+    gen_server:call({global, reg_name(MyId)}, dump_stats, infinity).
 
 init([MyId]) ->
     Ops = ets:new(operations_converger, [set, named_table, private]),
@@ -74,8 +74,8 @@ handle_call(clean_state, _From, S0=#state{ops=Ops, staleness=Staleness}) ->
     Staleness1 = ets:new(staleness, [set, named_table, private]),
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0, staleness=Staleness1}};
 
-handle_call({dump_stats, NLeaves}, _From, S0=#state{staleness=Staleness}) ->
-    Stats = stats_handler:compute_averages(Staleness, NLeaves),
+handle_call(dump_stats, _From, S0=#state{staleness=Staleness}) ->
+    Stats = stats_handler:compute_averages(Staleness),
     {reply, {ok, Stats}, S0}.
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId, staleness=Staleness}) ->

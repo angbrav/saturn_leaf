@@ -9,7 +9,7 @@
          async_read/3,
          async_update/4,
          clean/1,
-         collect_stats/2,
+         collect_stats/1,
          spawn_wrapper/4
         ]).
 
@@ -56,8 +56,8 @@ clean(MyId) ->
                   end, GrossPrefLists),
     ok.
 
-collect_stats(MyId, NLeaves) ->
-    saturn_leaf_converger:dump_stats(MyId, NLeaves).
+collect_stats(MyId) ->
+    saturn_leaf_converger:dump_stats(MyId).
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),
