@@ -31,8 +31,12 @@ compute_averages(Table, NLeaves) ->
                             case ets:lookup(Table, Sender) of
                                 [] ->
                                     Acc;
+                                [{Sender, {_, 0, SRemotes, TRemotes}}] ->
+                                    dict:store(Sender, {{remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc);
+                                [{Sender, {SUpdates, TUpdates, _, 0}}] ->
+                                    dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}}, Acc);
                                 [{Sender, {SUpdates, TUpdates, SRemotes, TRemotes}}] ->
-                                    dict:store(Sender, {{updates, trunc(SUpdates/TUpdates*1000)}, {remote_reads, trunc(SRemotes/TRemotes*1000)}}, Acc)
+                                    dict:store(Sender, {{updates, trunc(SUpdates/(TUpdates*1000))}, {remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc)
                             end
                          end, dict:new(), lists:seq(0, NLeaves-1)),
     Result.
