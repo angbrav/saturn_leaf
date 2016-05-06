@@ -75,7 +75,7 @@ handle_call(clean_state, _From, S0=#state{ops=Ops, staleness=Staleness}) ->
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0, staleness=Staleness1}};
 
 handle_call(dump_staleness, _From, S0=#state{staleness=Staleness, myid=MyId}) ->
-    ok = ets:tab2file(Staleness, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-staleness.txt')), [{sync, true}]),
+    ok = ets:tab2file(Staleness, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-staleness.txt'))),
     {reply, ok, S0}.
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId, staleness=Staleness}) ->
@@ -96,7 +96,7 @@ handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=O
     %lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
-            true = ets:insert(Staleness, {Label, {MyId, saturn_utilities:now_microsec()}}),
+            %true = ets:insert(Staleness, {Label, {MyId, saturn_utilities:now_microsec()}}),
             ok = execute_operation(Label, Value),
             Labels1 = queue:drop(Labels0),
             {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId, Staleness),

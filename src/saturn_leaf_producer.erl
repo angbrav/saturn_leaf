@@ -132,7 +132,7 @@ handle_cast(_Info, State) ->
     {noreply, State}.
 
 handle_call(dump_stats, _From, S0=#state{propagation_stats=PropagationStats, myid=MyId}) ->
-    ok = ets:tab2file(PropagationStats, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-propagation.txt')), [{sync, true}]),
+    ok = ets:tab2file(PropagationStats, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-propagation.txt'))),
     {reply, ok, S0};
 
 handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0, propagation_stats=PropagationStats0}) ->
