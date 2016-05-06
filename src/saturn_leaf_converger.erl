@@ -32,7 +32,7 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
 -export([handle/2,
-         restart/1,
+         clean_state/1,
          flush_list/3,
          flush_queue/4]).
 
@@ -50,19 +50,19 @@ handle(MyId, Message) ->
     %lager:info("Message received: ~p", [Message]),
     gen_server:cast({global, reg_name(MyId)}, Message).
 
-restart(MyId) ->
-    gen_server:call({global, reg_name(MyId)}, restart, infinity).
+clean_state(MyId) ->
+    gen_server:call({global, reg_name(MyId)}, clean_state, infinity).
 
 init([MyId]) ->
-    Ops = ets:new(operations_converger, [set, named_table]),
+    Ops = ets:new(operations_converger, [set, named_table, private]),
     {ok, #state{labels_queue=queue:new(),
                 ops=Ops,
                 queue_len=0,
                 myid=MyId}}.
 
-handle_call(restart, _From, S0=#state{ops=Ops}) ->
+handle_call(clean_state, _From, S0=#state{ops=Ops}) ->
     true = ets:delete(Ops),
-    Ops1 = ets:new(operations_converger, [set, named_table]),
+    Ops1 = ets:new(operations_converger, [set, named_table, private]),
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0}}.
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId}) ->

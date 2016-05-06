@@ -53,7 +53,7 @@
          last_label/1,
          set_tree/4,
          set_groups/2,
-         restart/1,
+         clean_state/1,
          check_ready/1]).
 
 -record(state, {partition,
@@ -91,9 +91,9 @@ set_groups(Node, Groups) ->
                                         {set_groups, Groups},
                                         ?PROXY_MASTER).
 
-restart(Node) ->
+clean_state(Node) ->
     riak_core_vnode_master:sync_command(Node,
-                                        restart,
+                                        clean_state,
                                         ?PROXY_MASTER).
     
 read(Node, BKey, Clock) ->
@@ -173,7 +173,7 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command(restart, _Sender, S0=#state{connector=Connector0, partition=Partition}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     {reply, ok, S0#state{max_ts=0,
                          last_label=none,

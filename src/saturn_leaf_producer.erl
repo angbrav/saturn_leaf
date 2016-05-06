@@ -33,7 +33,7 @@
          code_change/3, terminate/2]).
 -export([partition_heartbeat/3,
          check_ready/1,
-         restart/1,
+         clean_state/1,
          set_tree/3,
          set_groups/2,
          new_label/4]).
@@ -60,8 +60,8 @@ new_label(MyId, Label, Partition, IsUpdate) ->
 check_ready(MyId) ->
     gen_server:call({global, reg_name(MyId)}, check_ready, infinity).
 
-restart(MyId) ->
-    gen_server:call({global, reg_name(MyId)}, restart, infinity).
+clean_state(MyId) ->
+    gen_server:call({global, reg_name(MyId)}, clean_state, infinity).
 
 set_tree(MyId, TreeDict, NLeaves) ->
     gen_server:call({global, reg_name(MyId)}, {set_tree, TreeDict, NLeaves}, infinity).
@@ -123,7 +123,7 @@ handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, v
 handle_cast(_Info, State) ->
     {noreply, State}.
 
-handle_call(restart, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
+handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
     true = ets:delete(Labels0),
     Labels1 = ets:new(labels_producer, [ordered_set, named_table]),
     VClock1 = lists:foldl(fun({Partition, _}, Acc) ->

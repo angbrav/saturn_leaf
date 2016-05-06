@@ -46,12 +46,12 @@ async_read({Bucket, Key}, Clock, Client) ->
     saturn_proxy_vnode:async_read(IndexNode, {Bucket, Key}, Clock, Client).
 
 clean(MyId) ->
-    ok = saturn_leaf_producer:restart(MyId), 
-    ok = saturn_leaf_converger:restart(MyId), 
+    ok = saturn_leaf_producer:clean_state(MyId), 
+    ok = saturn_leaf_converger:clean_state(MyId), 
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     lists:foreach(fun(PrefList) ->
-                    ok = saturn_proxy_vnode:restart(hd(PrefList))
+                    ok = saturn_proxy_vnode:clean_state(hd(PrefList))
                   end, GrossPrefLists),
     ok.
 
