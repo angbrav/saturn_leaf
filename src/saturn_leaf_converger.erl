@@ -93,10 +93,8 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, que
     %{noreply, S0};
 
 handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId, staleness=Staleness}) ->
-    lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
-            stats_handler:add_update(Staleness, Label),
             ok = execute_operation(Label, Value),
             Labels1 = queue:drop(Labels0),
             {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId, Staleness),
@@ -119,6 +117,8 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 execute_operation(Label, Value) ->
+    lager:info("New operation to be executed. Label: ~p", [Label]),
+    stats_handler:add_update(Staleness, Label),
     BKey = Label#label.bkey,
     Clock = Label#label.timestamp,
     DocIdx = riak_core_util:chash_key(BKey),
@@ -174,7 +174,6 @@ handle_label(Label, Ops, Staleness) ->
         update ->
             case ets:lookup(Ops, Label) of
                 [{Label, Value}] ->
-                    stats_handler:add_update(Staleness, Label),
                     ok = execute_operation(Label, Value),
                     true = ets:delete(Ops, Label),
                     true;
