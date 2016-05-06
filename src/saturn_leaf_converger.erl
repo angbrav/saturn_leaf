@@ -95,7 +95,7 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, que
 handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId, staleness=Staleness}) ->
     case queue:peek(Labels0) of
         {value, Label} ->
-            ok = execute_operation(Label, Value),
+            ok = execute_operation(Label, Value, Staleness),
             Labels1 = queue:drop(Labels0),
             {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId, Staleness),
             {noreply, S0#state{labels_queue=Labels2, queue_len=QL1}};
@@ -116,7 +116,7 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-execute_operation(Label, Value) ->
+execute_operation(Label, Value, Staleness) ->
     lager:info("New operation to be executed. Label: ~p", [Label]),
     stats_handler:add_update(Staleness, Label),
     BKey = Label#label.bkey,
@@ -174,7 +174,7 @@ handle_label(Label, Ops, Staleness) ->
         update ->
             case ets:lookup(Ops, Label) of
                 [{Label, Value}] ->
-                    ok = execute_operation(Label, Value),
+                    ok = execute_operation(Label, Value, Staleness),
                     true = ets:delete(Ops, Label),
                     true;
                 [] ->
