@@ -36,7 +36,6 @@
          clean_state/1,
          set_tree/3,
          set_groups/2,
-         dump_stats/1,
          new_label/4]).
 
 -record(state, {vclock :: dict(),
@@ -45,7 +44,6 @@
                 manager,
                 pending,
                 labels :: list(),
-                propagation_stats,
                 myid}).
                 
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
@@ -71,12 +69,8 @@ set_tree(MyId, TreeDict, NLeaves) ->
 set_groups(MyId, Groups) ->
     gen_server:call({global, reg_name(MyId)}, {set_groups, Groups}, infinity).
     
-dump_stats(MyId) ->
-    gen_server:call({global, reg_name(MyId)}, dump_stats, infinity).
-
 init([MyId]) ->
     Manager = groups_manager:init_state(integer_to_list(MyId) ++ "producer"),
-    PropagationStats = ets:new(propagation, [ordered_set, named_table, private]),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     Dict = lists:foldl(fun(PrefList, Acc) ->
@@ -89,7 +83,7 @@ init([MyId]) ->
     erlang:send_after(10, self(), deliver),
     %{ok, Delay} = groups_manager_serv:get_delay_leaf(),
     Delay=0,
-    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager, propagation_stats=PropagationStats}}.
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager}}.
 
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=_Pending0, stable_time=_StableTime0, labels=_Labels, myid=_MyId}) ->
@@ -104,9 +98,7 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, p
     %end;
     {noreply, S0#state{vclock=VClock1}};
 
-handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=_StableTime0, myid=MyId, pending=_Pending0, delay=_Delay, propagation_stats=PropagationStats}) ->
-    Now = saturn_utilities:now_microsec(),
-    true = ets:insert(PropagationStats, {Label, {MyId, Now}}),
+handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=_StableTime0, myid=_MyId, pending=_Pending0, delay=_Delay}) ->
     TimeStamp = Label#label.timestamp,
     Time=0,
     %case IsUpdate of
@@ -131,19 +123,13 @@ handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, v
 handle_cast(_Info, State) ->
     {noreply, State}.
 
-handle_call(dump_stats, _From, S0=#state{propagation_stats=PropagationStats, myid=MyId}) ->
-    ok = ets:tab2file(PropagationStats, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-propagation.txt'))),
-    {reply, ok, S0};
-
-handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0, propagation_stats=PropagationStats0}) ->
+handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
     true = ets:delete(Labels0),
     Labels1 = ets:new(labels_producer, [ordered_set, named_table, private]),
-    true = ets:delete(PropagationStats0),
-    PropagationStats1 = ets:new(propagation, [ordered_set, named_table, private]),
     VClock1 = lists:foldl(fun({Partition, _}, Acc) ->
                             dict:store(Partition, 0, Acc)
                           end, dict:new(), dict:to_list(VClock0)),
-    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false, propagation_stats=PropagationStats1}};
+    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false}};
 
 handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0}) ->
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),

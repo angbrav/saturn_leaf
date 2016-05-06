@@ -34,7 +34,7 @@
 -export([handle/2,
          clean_state/1,
          flush_list/4,
-         dump_staleness/1,
+         dump_stats/2,
          flush_queue/5]).
 
 -record(state, {labels_queue :: queue(),
@@ -55,8 +55,8 @@ handle(MyId, Message) ->
 clean_state(MyId) ->
     gen_server:call({global, reg_name(MyId)}, clean_state, infinity).
 
-dump_staleness(MyId) ->
-    gen_server:call({global, reg_name(MyId)}, dump_staleness, infinity).
+dump_stats(MyId, Leaves) ->
+    gen_server:call({global, reg_name(MyId)}, {dump_stats, Leaves}, infinity).
 
 init([MyId]) ->
     Ops = ets:new(operations_converger, [set, named_table, private]),
@@ -74,9 +74,9 @@ handle_call(clean_state, _From, S0=#state{ops=Ops, staleness=Staleness}) ->
     Staleness1 = ets:new(staleness, [set, named_table, private]),
     {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0, staleness=Staleness1}};
 
-handle_call(dump_staleness, _From, S0=#state{staleness=Staleness, myid=MyId}) ->
-    ok = ets:tab2file(Staleness, list_to_atom(integer_to_list(MyId) ++ atom_to_list('-staleness.txt'))),
-    {reply, ok, S0}.
+handle_call({dump_stats, NLeaves}, _From, S0=#state{staleness=Staleness}) ->
+    Stats = stats_handler:compute_averages(Staleness, NLeaves),
+    {reply, {ok, Stats}, S0}.
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId, staleness=Staleness}) ->
     %lager:info("New stream received. Label: ~p", Stream),
@@ -96,7 +96,7 @@ handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=O
     %lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
-            %true = ets:insert(Staleness, {Label, {MyId, saturn_utilities:now_microsec()}}),
+            stats_handler:add_update(Staleness, Label),
             ok = execute_operation(Label, Value),
             Labels1 = queue:drop(Labels0),
             {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId, Staleness),
@@ -130,7 +130,7 @@ flush_list([], _Ops, _MyId, _Staleness) ->
     {queue:new(), 0};
 
 flush_list([Label|Rest]=List, Ops, MyId, Staleness) ->
-    case handle_label(Label, Ops, MyId, Staleness) of
+    case handle_label(Label, Ops, Staleness) of
         true ->
             flush_list(Rest, Ops, MyId, Staleness);
         false ->
@@ -140,7 +140,7 @@ flush_list([Label|Rest]=List, Ops, MyId, Staleness) ->
 flush_queue(Queue, Length, Ops, MyId, Staleness) ->
     case queue:peek(Queue) of
         {value, Label} ->
-            case handle_label(Label, Ops, MyId, Staleness) of
+            case handle_label(Label, Ops, Staleness) of
                 true ->
                     flush_queue(queue:drop(Queue), Length - 1, Ops, MyId, Staleness);
                 false ->
@@ -150,13 +150,13 @@ flush_queue(Queue, Length, Ops, MyId, Staleness) ->
             {queue:new(), 0}
     end.
 
-handle_label(Label, Ops, MyId, Staleness) ->
+handle_label(Label, Ops, Staleness) ->
     case Label#label.operation of
         remote_read ->
             BKey = Label#label.bkey,
             DocIdx = riak_core_util:chash_key(BKey),
             PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-            true = ets:insert(Staleness, {Label, {MyId, saturn_utilities:now_microsec()}}),
+            stats_handler:add_remote(Staleness, Label),
             [{IndexNode, _Type}] = PrefList,
             saturn_proxy_vnode:remote_read(IndexNode, Label),
             true;
@@ -174,7 +174,7 @@ handle_label(Label, Ops, MyId, Staleness) ->
         update ->
             case ets:lookup(Ops, Label) of
                 [{Label, Value}] ->
-                    true = ets:insert(Staleness, {Label, {MyId, saturn_utilities:now_microsec()}}),
+                    stats_handler:add_update(Staleness, Label),
                     ok = execute_operation(Label, Value),
                     true = ets:delete(Ops, Label),
                     true;
