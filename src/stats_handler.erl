@@ -19,7 +19,7 @@ add_remote(Table, Label) ->
 add_update(Table, Label) ->
     Sender = Label#label.sender,
     Dif = saturn_utilities:now_microsec() - Label#label.timestamp,
-    lager:info("Loggin label ~p", [Label]),
+    lager:info("Loggin label ~p, dif: ~p", [Label, Dif]),
     case ets:lookup(Table, Sender) of
         [] ->
             ets:insert(Table, {Sender, {Dif, 1, 0, 0}});

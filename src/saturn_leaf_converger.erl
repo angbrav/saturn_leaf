@@ -79,7 +79,7 @@ handle_call(dump_stats, _From, S0=#state{staleness=Staleness}) ->
     {reply, {ok, Stats}, S0}.
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId, staleness=Staleness}) ->
-    lager:info("New stream received. Label: ~p", Stream),
+    %lager:info("New stream received. Label: ~p", Stream),
     case QL0 of
         0 ->
             {Labels1, QL1} = flush_list(Stream, Ops, MyId, Staleness),
@@ -93,7 +93,7 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, que
     %{noreply, S0};
 
 handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId, staleness=Staleness}) ->
-    lager:info("New operation received. Label: ~p", [Label]),
+    %lager:info("New operation received. Label: ~p", [Label]),
     case queue:peek(Labels0) of
         {value, Label} ->
             ok = execute_operation(Label, Value, Staleness),
@@ -118,7 +118,7 @@ code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
 execute_operation(Label, Value, Staleness) ->
-    lager:info("New operation to be executed. Label: ~p", [Label]),
+    %lager:info("New operation to be executed. Label: ~p", [Label]),
     stats_handler:add_update(Staleness, Label),
     BKey = Label#label.bkey,
     Clock = Label#label.timestamp,
