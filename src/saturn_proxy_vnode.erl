@@ -523,7 +523,7 @@ do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical, myid=MyId, c
     {{ok, TimeStamp}, S1#state{last_physical=PhysicalClock1, vv=VV1, vv_remote=VVRemote1}}.
 
 clean_vector(Vector) ->
-    dict:foldl(fun(Entry, Acc) ->
-                dict:store(Entry, 0, Acc)
-               end, dict:new(), dict:fetch_keys(Vector)).
+    lists:foldl(fun(Entry, Acc) ->
+                    dict:store(Entry, 0, Acc)
+                end, dict:new(), dict:fetch_keys(Vector)).
 
