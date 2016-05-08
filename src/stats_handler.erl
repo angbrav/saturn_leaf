@@ -8,6 +8,7 @@
          add_update/3,
          compute_raw/1,
          merge_raw/2,
+         compute_averages_from_dict/1,
          compute_averages/1]).
 
 add_remote(Table, Sender, TimeStamp) ->
@@ -65,6 +66,21 @@ compute_raw_internal(Sender, Table, Dict) ->
             lager:error("Something is wrong with the stat format: ~p", [Else]),
             compute_raw_internal(ets:next(Table, Sender), Table, Dict)
     end.
+
+compute_averages_from_dict(Dict) ->
+    lists:foldl(fun({Entry, Value}, Acc) ->
+                    case Value of
+                        {_, 0, SRemotes, TRemotes} ->
+                            dict:store(Entry, {{remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc);
+                        {SUpdates, TUpdates, _, 0} ->
+                            dict:store(Entry, {{updates, trunc(SUpdates/(TUpdates*1000))}}, Acc);
+                        {SUpdates, TUpdates, SRemotes, TRemotes} ->
+                            dict:store(Entry, {{updates, trunc(SUpdates/(TUpdates*1000))}, {remote_reads, trunc(SRemotes/(TRemotes*1000))}}, Acc);
+                        Else ->
+                            lager:error("Something is wrong with the stat format: ~p", [Else]),
+                            Acc
+                    end
+                end, dict:new(), dict:to_list(Dict)).
 
 compute_averages(Table) ->
     compute_averages_internal(ets:first(Table), Table, dict:new()).

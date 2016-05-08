@@ -57,10 +57,11 @@ clean() ->
 collect_stats() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-    FinalStats = lists:foldl(fun(PrefList, Acc) ->
-                                {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList)),
-                                stats_handler:merge_raw(Acc, Stats)
-                             end, dict:new(), GrossPrefLists),
+    FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
+                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList)),
+                                    stats_handler:merge_raw(Acc, Stats)
+                                end, dict:new(), GrossPrefLists),
+    FinalStats = stats_handler:compute_avergaes_from_dict(FinalStatsRaw),
     {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
