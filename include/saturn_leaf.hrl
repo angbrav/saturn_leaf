@@ -25,8 +25,8 @@
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
 
--define(HEARTBEAT_FREQ, 1000).
--define(TIMES_FREQ, 1000).
+-define(HEARTBEAT_FREQ, 5).
+-define(TIMES_FREQ, 5).
 
 -define(PROPAGATION_MODE, naive_erlang).
 %-define(PROPAGATION_MODE, short_tcp).
