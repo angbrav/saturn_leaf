@@ -61,7 +61,7 @@ collect_stats() ->
                                     {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList)),
                                     stats_handler:merge_raw(Acc, Stats)
                                 end, dict:new(), GrossPrefLists),
-    FinalStats = stats_handler:compute_avergaes_from_dict(FinalStatsRaw),
+    FinalStats = stats_handler:compute_averages_from_dict(FinalStatsRaw),
     {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
