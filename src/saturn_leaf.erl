@@ -8,6 +8,8 @@
          async_update/4,
          update/3,
          read/2,
+         clean/0,
+         collect_stats/0,
          spawn_wrapper/4
         ]).
 
@@ -43,6 +45,23 @@ async_read({Bucket, Key}, Clock, Client) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:async_read(IndexNode, {Bucket, Key}, Clock, Client).
+
+clean() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:clean_state(hd(PrefList))
+                  end, GrossPrefLists),
+    ok.
+
+collect_stats() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    FinalStats = lists:foldl(fun(PrefList, Acc) ->
+                                {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList)),
+                                stats_handler:merge_raw(Acc, Stats)
+                             end, dict:new(), GrossPrefLists),
+    {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),
