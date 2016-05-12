@@ -38,7 +38,7 @@ read(ETS, Payload)->
     {BKey} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
-            {ok, {empty, 0}};
+            {ok, {empty, dict:new()}};
         [{BKey, Value}] ->
             {ok, Value}
     end.
