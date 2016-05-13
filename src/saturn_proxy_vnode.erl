@@ -233,7 +233,7 @@ handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv
                          end, VV_LST0, Partitions),
     {reply, ok, S0#state{vv=VV1, vv_lst=VV_LST1, vv_remote=VVRemote1, gst=VVRemote1, myid=MyId, pops=Pendings1}};
 
-handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition}) ->
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition, pops=Pendings, vv_lst=VV_LST0}) ->
     Entries = lists:seq(0, NLeaves-1),
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
@@ -243,7 +243,7 @@ handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manage
                         dict:store(Entry, 0, Acc)
                      end, dict:new(), FilteredEntries),
     lists:foreach(fun(Entry) ->
-                    {_ ,_, Table} = dict:fetch(Entry, Pendings0),
+                    {_ ,_, Table} = dict:fetch(Entry, Pendings),
                     true = ets:delete(Table)
                   end, dict:fetch_keys(Pendings)),
     Pendings1 = lists:foldl(fun(Entry, Acc) ->
@@ -325,9 +325,9 @@ handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{con
     %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, TimeStamp, Sender]),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, TimeStamp]),
     VV1 = dict:store(Sender, TimeStamp, VV0),
-    case is_stable(GST, TimeStamp) of
+    case is_stable(dict:to_list(GST), TimeStamp) of
         true ->
-            Connector1 = handle_operation(update, {BKey, Value, TimeStamp, Sender}, Connector0, GST, Receivers, Staleness),
+            Connector1 = handle_operation(update, {BKey, Value, TimeStamp, Sender}, Connector0, Receivers, Staleness),
             {noreply, S0#state{vv=VV1, connector=Connector1}};
         false ->
             {Head, Tail, PendingOps} = dict:fetch(Sender, Pendings),
@@ -339,9 +339,9 @@ handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{con
 handle_command({remote_read, BKey, Sender, Clock, Client, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Remotes0}) ->
     %lager:info("Received a remote read. Key ~p, Sender ~p, TS ~p, Client ~p",[BKey, Sender, Clock, Client]),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
-    case is_stable(GST, Clock) of
+    case is_stable(dict:to_list(GST), Clock) of
         true ->
-            Connector1 = handle_operation(remote_read, {BKey, Sender, Client, Type, Clock}, Connector0, GST, Receivers, Staleness),
+            Connector1 = handle_operation(remote_read, {BKey, Sender, Client, Type, Clock}, Connector0, Receivers, Staleness),
             {noreply, S0#state{connector=Connector1}};
         false ->
             Remotes1 =  [{Clock, Sender, {remote_read, {BKey, Sender, Client, Type, Clock}}}|Remotes0],
@@ -351,9 +351,9 @@ handle_command({remote_read, BKey, Sender, Clock, Client, Type}, _From, S0=#stat
 handle_command({remote_reply, Value, Client, Clock, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Remotes0}) ->
     %lager:info("Received a remote reply. Value ~p, Client ~p, Clock ~p",[Value, Client, Clock]),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
-    case is_stable(GST, Clock) of
+    case is_stable(dict:to_list(GST), Clock) of
         true ->
-            Connector1 = handle_operation(remote_reply, {Value, Client, Clock, Type}, Connector0, GST, Receivers, Staleness),
+            Connector1 = handle_operation(remote_reply, {Value, Client, Clock, Type}, Connector0, Receivers, Staleness),
             {noreply, S0#state{connector=Connector1}};
         false ->
             Remotes1 = [{Clock, Client, {remote_reply, {Value, Client, Clock, Type}}}|Remotes0],
@@ -462,9 +462,9 @@ flush_remotes([], _GST, _Connector0, _Receivers, _Staleness, Left) ->
 
 flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
     {TimeStamp, _Sender, {Type, Payload}} = Next,
-    case is_stable(GST, TimeStamp) of
+    case is_stable(dict:to_list(GST), TimeStamp) of
         true ->
-            handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness),
+            handle_operation(Type, Payload, Connector0, Receivers, Staleness),
             flush_remotes(Rest, GST, Connector0, Receivers, Staleness, Left);
         false ->
             flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
@@ -482,11 +482,11 @@ flush_pending_operations_internal(Head, Head, Table, _GST, Connector0, _Receiver
     {{0, 0, Table}, Connector0};
 
 flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers, Staleness) ->
-    case ets:fetch(Table, Head) of
+    case ets:lookup(Table, Head) of
         [{Head, {TimeStamp, _Sender, {Type, Payload}}}] ->
-                case is_stable(GST, TimeStamp) of
+                case is_stable(dict:to_list(GST), TimeStamp) of
                     true ->
-                        Connector1 = handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness),
+                        Connector1 = handle_operation(Type, Payload, Connector0, Receivers, Staleness),
                         true = ets:delete(Table, Head),
                         flush_pending_operations_internal(Head+1, Tail, Table, GST, Connector1, Receivers, Staleness);
                     false ->
@@ -496,7 +496,7 @@ flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers,
             {{Head, Tail, Table}, Connector0}
     end.
 
-handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
+handle_operation(Type, Payload, Connector0, Receivers, Staleness) ->
     case Type of
         update ->
             {BKey, Value, TimeStamp, Sender} = Payload,
@@ -504,12 +504,6 @@ handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
             stats_handler:add_update(Staleness, Sender, Clock),
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             Connector1;
-            %{ok, {_StoredValue, StoredTimeStamp}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-            %case StoredTimeStamp =< TimeStamp of
-            %    true ->
-            %    false ->
-            %        Connector0
-            %end;
         remote_read ->
             {BKey, Sender, Client, Call, TimeStamp} = Payload,
             Clock = dict:fetch(Sender, TimeStamp),
@@ -522,9 +516,9 @@ handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
             {Value, Client, Clock, Call} = Payload,
             case Call of
                 sync ->
-                    riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}});
+                    riak_core_vnode:reply(Client, {ok, {Value, Clock}});
                 async ->
-                    gen_server:reply(Client, {ok, {Value, Clock, GST}})
+                    gen_server:reply(Client, {ok, {Value, Clock}})
             end,
             Connector0;
         _ ->
@@ -619,26 +613,19 @@ clean_lst_vector(Vector, Init) ->
 
 merge_client_gst(GST, Clients) ->
     lists:foldl(fun({Entry, Clock}, Acc) ->
-                    ClientClock = dict:fecth(Entry, Clients),
+                    ClientClock = dict:fetch(Entry, Clients),
                     dict:store(Entry, max(ClientClock, Clock), Acc)
                 end, dict:new(), dict:to_list(GST)).
-
-%is_larger([], _GST2) ->
-    %false;
-
-%is_larger([{DC, Clock}|T], GST2) ->
-    %Clock2 = dict:fetch(DC, GST2),
-    %case (Clock>Clock2) of
-        %true -> true;
-        %false -> is_larger(T, GST2)
-    %end.
 
 is_stable([], _TimeStamp) ->
     true;
 
 is_stable([{DC, Clock}|T], TimeStamp) ->
-    Clock2 = dict:fetch(DC, TimeStamp),
-    case (Clock>=Clock2) of
-        true -> is_stable(T, TimeStamp);
-        false -> false
+    case dict:find(DC, TimeStamp) of
+        {ok, Clock2} when (Clock>=Clock2) ->
+            is_stable(T, TimeStamp);
+        error ->
+            is_stable(T, TimeStamp);
+        _ ->
+            false
     end.
