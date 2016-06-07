@@ -332,7 +332,7 @@ handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_
     Max = max(dict:fetch(MyId, VV0), PhysicalClock0),
     VVRemote1 = lists:foldl(fun(Id, Acc) ->
                                 Clock = dict:fetch(Id, Acc),
-                                case Clock < Max of
+                                case ((Clock + ?HEARTBEAT_FREQ*1000) < Max) of
                                     true ->
                                         Receiver = dict:fetch(Id, Receivers),
                                         saturn_leaf_converger:heartbeat(Receiver, Partition, Max, MyId),
@@ -464,19 +464,20 @@ handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
             Connector0
     end.
 
-do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{myid=MyId, connector=Connector, gst=GST0, receivers=Receivers, manager=Manager}) ->
+do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{myid=MyId, connector=Connector, gst=GST0, receivers=Receivers, manager=Manager, pops=PendingOps, staleness=Staleness}) ->
     GST1 = max(GST0, ClientGST),
+    Connector1 = flush_pending_operations(PendingOps, GST1, Connector, Receivers, Staleness),
     Groups = Manager#state_manager.groups,
     Tree = Manager#state_manager.tree,
     case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
         {ok, MyId} ->
-            {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-            {ok, {Value, Ts, GST1}, S0#state{gst=GST1}};
+            {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector1, {BKey}),
+            {ok, {Value, Ts, GST1}, S0#state{gst=GST1, connector=Connector1}};
         {ok, Id} ->
             %Remote read
             Receiver = dict:fetch(Id, Receivers),
             saturn_leaf_converger:remote_read(Receiver, BKey, MyId, max(ClientGST, ClientClock), From, Type),
-            {remote, S0#state{gst=GST1}};
+            {remote, S0#state{gst=GST1, connector=Connector1}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
