@@ -59,7 +59,8 @@ init([MyId]) ->
     lager:info("Paths: ~p", [dict:to_list(Paths)]),
     {ok, Nodes} = groups_manager:get_mypath(MyId, Paths),
     {Queues, Busy} = lists:foldl(fun(Node,{Queues0, Busy0}) ->
-                                    {dict:store(Node, queue:new(), Queues0), dict:store(Node, false, Busy0)}
+                                    Name = list_to_atom(integer_to_list(MyId) ++ "internal" ++ integer_to_list(Node)),
+                                    {dict:store(Node, ets_queue:new(Name), Queues0), dict:store(Node, false, Busy0)}
                                  end, {dict:new(), dict:new()}, Nodes),
     Tree = Manager#state_manager.tree,
     {ok, Delays0} = groups_manager:get_delays_internal(Tree, MyId),
@@ -88,7 +89,9 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                                     Now = saturn_utilities:now_microsec(),
                                                                     Time = Now + Delay,
                                                                     Queue0 = dict:fetch(Node, Acc1),
-                                                                    Queue1 = queue:in({Time, Label}, Queue0),
+                                                                    lager:info("Inserting into queue: ~p", [Node]),
+                                                                    Queue1 = ets_queue:in({Time, Label}, Queue0),
+                                                                    lager:info("New queue: ~p", [Queue1]),
                                                                     dict:store(Node, Queue1, Acc1);
                                                                 false -> Acc1
                                                             end;
@@ -102,7 +105,7 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                                 true ->
                                                                     Time = 0,
                                                                     Queue0 = dict:fetch(Node, Acc1),
-                                                                    Queue1 = queue:in({Time, Label}, Queue0),
+                                                                    Queue1 = ets_queue:in({Time, Label}, Queue0),
                                                                     dict:store(Node, Queue1, Acc1);
                                                                 false -> Acc1
                                                             end
@@ -126,22 +129,27 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_call(restart, _From, S0=#state{busy=Busy0, queues=Queues0}) ->
-    Queues1 = lists:foldl(fun({Node, _}, Acc) ->
-                            dict:store(Node, queue:new(), Acc)
+    Queues1 = lists:foldl(fun({Node, Queue}, Acc) ->
+                            dict:store(Node, ets_queue:clean(Queue), Acc)
                           end, dict:new(), dict:to_list(Queues0)),
     Busy1 = lists:foldl(fun({Node, _}, Acc) ->
                             dict:store(Node, false, Acc)
                         end, dict:new(), dict:to_list(Busy0)),
     {reply, ok, S0#state{queues=Queues1, busy=Busy1}};
 
-handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=MyId}) ->
+handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=MyId, queues=Queues}) ->
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
+    lager:info("Paths: ~p", [dict:to_list(Paths)]),
     {ok, Nodes} = groups_manager:get_mypath(MyId, Paths),
-    {Queues, Busy} = lists:foldl(fun(Node,{Queues0, Busy0}) ->
-                                    {dict:store(Node, queue:new(), Queues0), dict:store(Node, false, Busy0)}
+    lists:foreach(fun({_Node, Queue}) ->
+                    ets_queue:delete(Queue)
+                  end, dict:to_list(Queues)), 
+    {Queues1, Busy} = lists:foldl(fun(Node,{Queues0, Busy0}) ->
+                                    Name = list_to_atom(integer_to_list(MyId) ++ "internal" ++ integer_to_list(Node)),
+                                    {dict:store(Node, ets_queue:new(Name), Queues0), dict:store(Node, false, Busy0)}
                                  end, {dict:new(), dict:new()}, Nodes),
     Manager1 = Manager0#state_manager{paths=Paths, tree=Tree, nleaves=Leaves},
-    {reply, ok, S0#state{manager=Manager1, queues=Queues, busy=Busy}};
+    {reply, ok, S0#state{manager=Manager1, queues=Queues1, busy=Busy}};
 
 handle_call({set_groups, RGroups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
@@ -173,13 +181,14 @@ code_change(_OldVsn, State, _Extra) ->
 %% ------------------------------------------------------------------
 deliver_labels(Queue0, Node, MyId, Deliverables0, NLeaves) ->
     Now = saturn_utilities:now_microsec(),
-    case queue:out(Queue0) of
-        {empty, Queue0} ->
+    case ets_queue:peek(Queue0) of
+        empty ->
             propagate_stream(Node, lists:reverse(Deliverables0), MyId, NLeaves),
             {Queue0, false};
-        {{value, {Time, Label}}, Queue1} when Time =< Now ->
+        {value, {Time, Label}} when Time =< Now ->
+            {_, Queue1} = ets_queue:out(Queue0),
             deliver_labels(Queue1, Node, MyId, [Label|Deliverables0], NLeaves);
-        {{value, {Time, _Label}}, _Queue1} ->
+        {value, {Time, _Label}} ->
             propagate_stream(Node, lists:reverse(Deliverables0), MyId, NLeaves),
             NextDelivery = trunc((Time - Now)/1000),
             erlang:send_after(NextDelivery, self(), {deliver_labels, Node}),
