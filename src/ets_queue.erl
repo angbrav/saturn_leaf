@@ -9,6 +9,7 @@
          delete/1,
          in/2,
          out/1,
+         is_empty/1,
          peek/1]).
 
 new(Name) ->
@@ -55,6 +56,12 @@ peek({Head, _Tail, Table}) ->
         [{Head, Element}] ->
             {value, Element}
     end.
+
+is_empty({0, 0, _Table}) ->
+    true;
+
+is_empty({_Head, _Tail, _Table}) ->
+    false.
 
 -ifdef(TEST).
 ets_queue_test() ->

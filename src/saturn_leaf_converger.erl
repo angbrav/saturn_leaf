@@ -33,13 +33,10 @@
          code_change/3, terminate/2]).
 -export([handle/2,
          clean_state/1,
-         flush_list/4,
-         dump_stats/1,
-         flush_queue/5]).
+         dump_stats/1]).
 
 -record(state, {labels_queue :: queue(),
                 ops,
-                queue_len,
                 staleness,
                 myid}).
                
@@ -61,45 +58,48 @@ dump_stats(MyId) ->
 init([MyId]) ->
     Ops = ets:new(operations_converger, [set, named_table, private]),
     Staleness = ets:new(staleness, [set, named_table, private]),
-    {ok, #state{labels_queue=queue:new(),
+    Name = list_to_atom(integer_to_list(MyId) ++ "converger_queue"),
+    {ok, #state{labels_queue=ets_queue:new(Name),
                 ops=Ops,
-                queue_len=0,
                 staleness=Staleness,
                 myid=MyId}}.
 
-handle_call(clean_state, _From, S0=#state{ops=Ops, staleness=Staleness}) ->
+handle_call(clean_state, _From, S0=#state{ops=Ops, staleness=Staleness, labels_queue=Labels}) ->
     true = ets:delete(Ops),
     Ops1 = ets:new(operations_converger, [set, named_table, private]),
     true = ets:delete(Staleness),
     Staleness1 = ets:new(staleness, [set, named_table, private]),
-    {reply, ok, S0#state{ops=Ops1, labels_queue=queue:new(), queue_len=0, staleness=Staleness1}};
+    {reply, ok, S0#state{ops=Ops1, labels_queue=ets_queue:clean(Labels), staleness=Staleness1}};
 
 handle_call(dump_stats, _From, S0=#state{staleness=Staleness}) ->
     Stats = stats_handler:compute_averages(Staleness),
     {reply, {ok, Stats}, S0}.
 
-handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, queue_len=QL0, ops=Ops, myid=MyId, staleness=Staleness}) ->
+handle_cast(completed, S0=#state{labels_queue=Labels0, ops=Ops, staleness=Staleness}) ->
+    {_, Labels1} = ets_queue:out(Labels0),
+    Labels2 =  handle_label(ets_queue:peek(Labels1), Labels1, Ops, Staleness),
+    {noreply, S0#state{labels_queue=Labels2}};
+    
+handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, ops=Ops, staleness=Staleness}) ->
     %lager:info("New stream received. Label: ~p", Stream),
-    case QL0 of
-        0 ->
-            {Labels1, QL1} = flush_list(Stream, Ops, MyId, Staleness),
-            {noreply, S0#state{labels_queue=Labels1, queue_len=QL1}}; 
-        _ ->
-            {Labels1, Total} = lists:foldl(fun(Elem, {Queue, Sum}) ->
-                                            {queue:in(Elem, Queue), Sum + 1}
-                                           end, {Labels0, 0}, Stream),
-            {noreply, S0#state{labels_queue=Labels1, queue_len=QL0+Total}}
-    end;
-    %{noreply, S0};
+    Empty = ets_queue:is_empty(Labels0),
+    Labels1 = lists:foldl(fun(Label, Queue) ->
+                            ets_queue:in(Label, Queue)
+                          end, Labels0, Stream),
+    case Empty of
+        true ->
+            Labels2 =  handle_label(ets_queue:peek(Labels1), Labels1, Ops, Staleness);
+        false ->
+            Labels2 = Labels1
+    end,
+    {noreply, S0#state{labels_queue=Labels2}};
 
-handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, queue_len=QL0, myid=MyId, staleness=Staleness}) ->
+handle_cast({new_operation, Label, Value}, S0=#state{labels_queue=Labels0, ops=Ops, staleness=Staleness}) ->
     %lager:info("New operation received. Label: ~p", [Label]),
-    case queue:peek(Labels0) of
+    case ets_queue:peek(Labels0) of
         {value, Label} ->
-            ok = execute_operation(Label, Value, Staleness),
-            Labels1 = queue:drop(Labels0),
-            {Labels2, QL1} = flush_queue(Labels1, QL0-1, Ops, MyId, Staleness),
-            {noreply, S0#state{labels_queue=Labels2, queue_len=QL1}};
+            execute_operation(Label, Value, Staleness),
+            {noreply, S0};
         _ ->
             true = ets:insert(Ops, {Label, Value}),
             {noreply, S0}
@@ -125,33 +125,12 @@ execute_operation(Label, Value, Staleness) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    ok = saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
+    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
 
-flush_list([], _Ops, _MyId, _Staleness) ->
-    {queue:new(), 0};
+handle_label(empty, Queue, _Ops, _Staleness) ->
+    Queue;
 
-flush_list([Label|Rest]=List, Ops, MyId, Staleness) ->
-    case handle_label(Label, Ops, Staleness) of
-        true ->
-            flush_list(Rest, Ops, MyId, Staleness);
-        false ->
-            {queue:from_list(List), length(List)}
-    end.
-
-flush_queue(Queue, Length, Ops, MyId, Staleness) ->
-    case queue:peek(Queue) of
-        {value, Label} ->
-            case handle_label(Label, Ops, Staleness) of
-                true ->
-                    flush_queue(queue:drop(Queue), Length - 1, Ops, MyId, Staleness);
-                false ->
-                    {Queue, Length}
-            end;
-        _ ->
-            {queue:new(), 0}
-    end.
-
-handle_label(Label, Ops, Staleness) ->
+handle_label({value, Label}, Queue, Ops, Staleness) ->
     case Label#label.operation of
         remote_read ->
             BKey = Label#label.bkey,
@@ -160,7 +139,8 @@ handle_label(Label, Ops, Staleness) ->
             stats_handler:add_remote(Staleness, Label),
             [{IndexNode, _Type}] = PrefList,
             saturn_proxy_vnode:remote_read(IndexNode, Label),
-            true;
+            {_, Queue1} = ets_queue:out(Queue),
+            handle_label(ets_queue:peek(Queue1), Queue1, Ops, Staleness);
         remote_reply ->
             Payload = Label#label.payload,
             Client = Payload#payload_reply.client,
@@ -171,17 +151,18 @@ handle_label(Label, Ops, Staleness) ->
                 async ->
                     gen_server:reply(Client, {ok, {Value, 0}})
             end,
-            true;
+            {_, Queue1} = ets_queue:out(Queue),
+            handle_label(ets_queue:peek(Queue1), Queue1, Ops, Staleness);
         update ->
             case ets:lookup(Ops, Label) of
                 [{Label, Value}] ->
-                    ok = execute_operation(Label, Value, Staleness),
-                    true = ets:delete(Ops, Label),
-                    true;
+                    execute_operation(Label, Value, Staleness),
+                    true = ets:delete(Ops, Label);
                 [] ->
                     %lager:info("Operation not received for label: ~p", [Label]),
-                    false
-            end
+                    noop
+            end,
+            Queue
     end.
 
 -ifdef(TEST).

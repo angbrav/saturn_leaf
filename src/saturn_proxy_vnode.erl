@@ -125,9 +125,10 @@ async_update(Node, BKey, Value, Clock, Client) ->
                                    ?PROXY_MASTER).
 
 propagate(Node, BKey, Value, TimeStamp) ->
-    riak_core_vnode_master:sync_command(Node,
-                                        {propagate, BKey, Value, TimeStamp},
-                                        ?PROXY_MASTER).
+    riak_core_vnode_master:command(Node,
+                                   {propagate, BKey, Value, TimeStamp},
+                                   {fsm, undefines, self()},
+                                   ?PROXY_MASTER).
 
 remote_read(Node, Label) ->
     riak_core_vnode_master:command(Node,
@@ -221,9 +222,10 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     gen_server:reply(Client, {ok, TimeStamp}),
     {noreply, S1};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
+handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0, myid=MyId}) ->
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-    {reply, ok, S0#state{connector=Connector1}};
+    saturn_leaf_converger:handle(MyId, completed),
+    {noreply, S0#state{connector=Connector1}};
     
 handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     BKeyToRead = Label#label.bkey,
