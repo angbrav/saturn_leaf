@@ -2,9 +2,18 @@
 
 -include("saturn_leaf.hrl").
 
--export([add_remote/2,
+-export([init/0,
+         clean/1,
+         add_remote/2,
          add_update/2,
          compute_averages/1]).
+
+init() ->
+    ets:new(staleness, [set, named_table, private]).
+
+clean(Table) ->
+    true = ets:delete(Table),
+    ets:new(staleness, [set, named_table, private]).
 
 add_remote(Table, Label) ->
     Sender = Label#label.sender,
