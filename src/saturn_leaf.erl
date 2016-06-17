@@ -9,7 +9,7 @@
          update/3,
          read/2,
          clean/0,
-         collect_stats/0,
+         collect_stats/2,
          spawn_wrapper/4
         ]).
 
@@ -54,14 +54,14 @@ clean() ->
                   end, GrossPrefLists),
     ok.
 
-collect_stats() ->
+collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
-                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList)),
-                                    stats_handler:merge_raw(Acc, Stats)
-                                end, dict:new(), GrossPrefLists),
-    FinalStats = stats_handler:compute_averages_from_dict(FinalStatsRaw),
+                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList), From, Type),
+                                    ?STALENESS:merge_raw(Acc, Stats)
+                                end, [], GrossPrefLists),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(FinalStatsRaw),
     {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
