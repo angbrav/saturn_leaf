@@ -49,7 +49,7 @@ compute_cdf(Data, From, Type) ->
             List = get_ordered(From, Remotes, IdRem)
     end,
     ListSteps = get_liststeps(List),
-    generate_percentiles(List, 1, ListSteps, []).
+    generate_percentiles(List, 0, ListSteps, []).
 
 get_liststeps(List) ->
     Total = compute_size(List, 0),
