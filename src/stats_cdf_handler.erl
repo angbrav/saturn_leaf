@@ -55,7 +55,7 @@ compute_raw(Data, From, Type) ->
     end.
 
 merge_raw(FinalList, NewList) ->
-    lists:foldl(fun({Time, v}, Acc) ->
+    lists:foldl(fun({Time, _List}, Acc) ->
                     orddict:append(Time, v, Acc)
                 end, FinalList, NewList).
 
