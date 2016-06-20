@@ -165,7 +165,7 @@ handle_command({remote_reply, Id, Label}, _From, S0=#state{ops=Ops, values=Value
     {noreply, S0};
 
 handle_command({update, Id, Label, Value}, _From, S0=#state{ops=Ops, values=Values}) ->
-    Deps = Label#label.payload,
+    {Deps, _Time} = Label#label.payload,
     true = ets:insert(Values, {Id, Value}),
     case Deps of
         [] ->
@@ -255,7 +255,7 @@ handle_pending_op(Id, Label, Values) ->
                     lager:error("deps_checked received for id: ~p, but no pending value with such an id", [Id]),
                     {error, no_value};
                 [{Id, Value}] ->
-                    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, {Label#label.timestamp, Label#label.payload}),
+                    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, {Label#label.timestamp, Label#label.payload, Label#label.sender}),
                     true = ets:delete(Values, Id),
                     ok
             end;

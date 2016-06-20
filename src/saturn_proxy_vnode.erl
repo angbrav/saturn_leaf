@@ -56,6 +56,7 @@
          set_groups/2,
          set_myid/2,
          clean_state/1,
+         collect_stats/3,
          check_ready/1]).
 
 -record(state, {partition,
@@ -66,6 +67,7 @@
                 receivers,
                 rest_deps,
                 manager,
+                staleness,
                 myid}).
 
 %% API
@@ -152,6 +154,11 @@ clean_state(Node) ->
                                         clean_state,
                                         ?PROXY_MASTER).
 
+collect_stats(Node, From, Type) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {collect_stats, From, Type},
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
@@ -159,6 +166,8 @@ init([Partition]) ->
     Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
     RestDeps = ets:new(Name2, [set, named_table, private]),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    Name3 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness = ?STALENESS:init(Name3),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 last_label=none,
@@ -166,6 +175,7 @@ init([Partition]) ->
                 max_ts=0,
                 manager=Manager,
                 rest_deps=RestDeps,
+                staleness=Staleness,
                 connector=Connector
                }}.
 
@@ -193,8 +203,10 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
             false
     end.
 
+handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
+    {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
 
-handle_command(clean_state, _Sender, S0=#state{partition=Partition, key_deps=KeyDeps0, rest_deps=RestDeps0, connector=Connector0}) ->
+handle_command(clean_state, _Sender, S0=#state{partition=Partition, key_deps=KeyDeps0, rest_deps=RestDeps0, connector=Connector0, staleness=Staleness}) ->
     true = ets:delete(KeyDeps0),
     true = ets:delete(RestDeps0),
     Name1 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(key_deps_cops)),
@@ -202,10 +214,13 @@ handle_command(clean_state, _Sender, S0=#state{partition=Partition, key_deps=Key
     Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(rest_deps_cops)),
     RestDeps = ets:new(Name2, [set, named_table, private]),
     Connector = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
+    Name3 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness1 = ?STALENESS:clean(Staleness, Name3),
     {reply, ok, S0#state{last_label=none,
                        key_deps=KeyDeps,
                        max_ts=0,
                        rest_deps=RestDeps,
+                       staleness=Staleness1,
                        connector=Connector}};
 
 handle_command({set_myid, MyId}, _Sender, S0) ->
@@ -313,8 +328,9 @@ handle_command({remote_update, BKey, Value, Deps, Client, TypeCall}, _From, S0=#
     end,
     {noreply, S0#state{connector=Connector1}};
 
-handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps, rest_deps=RestDeps}) ->
+handle_command({propagate, BKey, Value, {TimeStamp, {Deps, Time}, Sender}}, _From, S0=#state{connector=Connector0, key_deps=KeyDeps, rest_deps=RestDeps, staleness=Staleness}) ->
     %lager:info("Received remote update: ~p", [{BKey, Value}]),
+     Staleness1 = ?STALENESS:add_update(Staleness, Sender, Time),
     {ok, {_OldValue, {OldVersion, _OldDeps}}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
     case OldVersion =< TimeStamp of
         true ->
@@ -325,22 +341,24 @@ handle_command({propagate, BKey, Value, {TimeStamp, Deps}}, _From, S0=#state{con
                 [{BKey, Orddict0}] ->
                     handle_pending_deps(Orddict0, BKey, TimeStamp, KeyDeps, RestDeps)
             end,
-            {noreply, S0#state{connector=Connector1}};
+            {noreply, S0#state{connector=Connector1, staleness=Staleness1}};
         false ->
-            {noreply, S0}
+            {noreply, S0#state{staleness=Staleness1}}
     end;
     
-handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers}) ->
+handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, myid=MyId, partition=Partition, receivers=Receivers, staleness=Staleness}) ->
     BKey = Label#label.bkey,
     Payload = Label#label.payload,
     Sender = Label#label.sender,
+    TimeStamp = Label#label.timestamp,
+    Staleness1 = ?STALENESS:add_remote(Staleness, Sender, TimeStamp),
     {ok, {Value,{Version, Deps}}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
     Client = Payload#payload_remote.client,
     TypeCall = Payload#payload_remote.type_call,
     NewLabel = create_label(remote_reply, BKey, Version, {Partition, node()}, MyId, #payload_reply{value=Value, deps=Deps, client=Client, type_call=TypeCall}),
     Receiver = dict:fetch(Sender, Receivers),
     saturn_leaf_converger:handle(Receiver, {remote_reply, NewLabel}),
-    {noreply, S0};
+    {noreply, S0#state{staleness=Staleness1}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
@@ -423,7 +441,7 @@ do_read(Type, BKey, Deps, From, _S0=#state{connector=Connector, myid=MyId, parti
             {ok, Value};
         {ok, Id} ->
             %Remote read
-            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps, type_call=Type}),
+            Label = create_label(remote_read, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, #payload_remote{client=From, deps=Deps, type_call=Type}),
             Receiver = dict:fetch(Id, Receivers),
             saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
             remote;
@@ -459,7 +477,7 @@ do_put(BKey, Value, Deps, Partition, MyId, Connector0, KeyDeps, RestDeps, Receiv
         [{BKey, Orddict0}] ->
             handle_pending_deps(Orddict0, BKey, Version, KeyDeps, RestDeps)
     end,
-    Label = create_label(update, BKey, Version, {Partition, node()}, MyId, Deps),
+    Label = create_label(update, BKey, Version, {Partition, node()}, MyId, {Deps, saturn_utilities:now_microsec()}),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->

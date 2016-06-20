@@ -9,7 +9,8 @@
          async_update/4,
          async_read/3,
          spawn_wrapper/4,
-         clean_state/1
+         clean_state/1,
+         collect_stats/2
         ]).
 
 %% Public API
@@ -61,4 +62,14 @@ clean_state(MyId) ->
                     ok = saturn_cops_vnode:clean_state(hd(PrefList))
                   end, GrossPrefLists),
     ok.
+
+collect_stats(From, Type) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
+                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList), From, Type),
+                                    ?STALENESS:merge_raw(Acc, Stats)
+                                end, [], GrossPrefLists),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(FinalStatsRaw),
+    {ok, FinalStats}.
     
