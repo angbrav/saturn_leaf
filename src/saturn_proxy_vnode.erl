@@ -48,17 +48,17 @@
          async_update/5,
          propagate/4,
          remote_read/2,
-         last_label/1,
          set_receivers/2,
          set_tree/4,
          set_groups/2,
          set_myid/2,
+         collect_stats/3,
+         clean_state/1,
          check_ready/1]).
 
 -record(state, {partition,
-                max_ts,
+                staleness,
                 connector,
-                last_label,
                 receivers,
                 manager,
                 myid}).
@@ -66,15 +66,6 @@
 %% API
 start_vnode(I) ->
     riak_core_vnode_master:get_vnode_pid(I, ?MODULE).
-
-%Testing purposes
-last_label(BKey) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    riak_core_vnode_master:sync_command(IndexNode,
-                                        last_label,
-                                        ?PROXY_MASTER).
 
 read(Node, BKey, Clock) ->
     riak_core_vnode_master:sync_command(Node,
@@ -130,14 +121,25 @@ set_groups(Node, Groups) ->
                                         {set_groups, Groups},
                                         ?PROXY_MASTER).
 
+clean_state(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        clean_state,
+                                        ?PROXY_MASTER).
+
+collect_stats(Node, From, Type) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {collect_stats, From, Type},
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness = ?STALENESS:init(Name),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
-                max_ts=0,
                 manager=Manager,
-                last_label=none,
+                staleness=Staleness,
                 connector=Connector
                }}.
 
@@ -179,6 +181,16 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     ok = groups_manager:set_groups(Table, Groups),
     {reply, ok, S0};
 
+handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
+    {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
+
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, staleness=Staleness}) ->
+    Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
+    Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness1 = ?STALENESS:clean(Staleness, Name),
+    {reply, ok, S0#state{staleness=Staleness1,
+                         connector=Connector1}};
+
 handle_command({read, BKey, _Clock}, From, S0) ->
     case do_read(sync, BKey, From, S0) of
         {error, Reason} ->
@@ -213,13 +225,17 @@ handle_command({async_update, BKey, Value, _Clock, Client}, _From, S0) ->
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0}) ->
+handle_command({propagate, BKey, Value, {TimeStamp, Sender}}, _From, S0=#state{connector=Connector0, staleness=Staleness}) ->
+    Staleness1 = ?STALENESS:add_update(Staleness, Sender, TimeStamp),
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-    {noreply, S0#state{connector=Connector1}};
+    {noreply, S0#state{connector=Connector1, staleness=Staleness1}};
     
-handle_command({remote_read, Label}, _From, S0=#state{connector=Connector}) ->
+handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, staleness=Staleness}) ->
     BKey = Label#label.bkey,
     Payload = Label#label.payload,
+    Sender = Label#label.sender,
+    TimeStamp = Label#label.timestamp,
+    Staleness1 = ?STALENESS:add_remote(Staleness, Sender, TimeStamp),
     {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
     Client = Payload#payload_remote.client,
     case Payload#payload_remote.type_call of
@@ -230,10 +246,7 @@ handle_command({remote_read, Label}, _From, S0=#state{connector=Connector}) ->
         _ ->
             lager:error("Unknown type of call")
     end,
-    {noreply, S0};
-
-handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
-    {reply, {ok, LastLabel}, S0};
+    {noreply, S0#state{staleness=Staleness1}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -289,8 +302,8 @@ do_read(Type, BKey, From, _S0=#state{connector=Connector, myid=MyId, partition=P
             ?BACKEND_CONNECTOR:read(Connector, {BKey});
         {ok, Id} ->
             %Remote read
-            lager:info("Remote Update! Key: ~p", [BKey]),
-            Label = create_label(remote_read, BKey, ts, {Partition, node()}, MyId, #payload_remote{client=From, type_call=Type}),
+            %lager:info("Remote Update! Key: ~p", [BKey]),
+            Label = create_label(remote_read, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, #payload_remote{client=From, type_call=Type}),
             Receiver = dict:fetch(Id, Receivers),
             saturn_leaf_converger:handle(Receiver, {remote_read, Label}),
             remote;
@@ -310,7 +323,7 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
             lager:error("BKey ~p ~p is not in the dictionary",  [BKey, Reason1]),
             S0
     end,
-    Label = create_label(update, BKey, ts, {Partition, node()}, MyId, {}),
+    Label = create_label(update, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, {}),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->

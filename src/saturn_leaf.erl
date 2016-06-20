@@ -8,7 +8,9 @@
          read/2,
          async_read/3,
          async_update/4,
-         spawn_wrapper/4
+         spawn_wrapper/4,
+         clean/0,
+         collect_stats/2
         ]).
 
 %% Public API
@@ -43,6 +45,24 @@ async_read({Bucket, Key}, Clock, Client) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:async_read(IndexNode, {Bucket, Key}, Clock, Client).
+
+clean() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    lists:foreach(fun(PrefList) ->
+                    ok = saturn_proxy_vnode:clean_state(hd(PrefList))
+                  end, GrossPrefLists),
+    ok.
+
+collect_stats(From, Type) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
+                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList), From, Type),
+                                    ?STALENESS:merge_raw(Acc, Stats)
+                                end, [], GrossPrefLists),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(FinalStatsRaw),
+    {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),

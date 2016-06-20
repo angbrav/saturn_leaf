@@ -81,10 +81,11 @@ code_change(_OldVsn, State, _Extra) ->
 execute_operation(Label, Value) ->
     BKey = Label#label.bkey,
     Clock = Label#label.timestamp,
+    Sender = Label#label.sender,
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, Clock).
+    saturn_proxy_vnode:propagate(IndexNode, BKey, Value, {Clock, Sender}).
 
 -ifdef(TEST).
 
