@@ -619,7 +619,7 @@ merge_client_gst(GST, Clients) ->
 is_stable([], _TimeStamp) ->
     true;
 
-is_stable([{DC, Clock}|T], TimeStamp) ->
+is_stable([{_DC, _Clock}|_T], _TimeStamp) ->
     true.
    % case dict:find(DC, TimeStamp) of
    %     {ok, Clock2} when (Clock>=Clock2) ->
