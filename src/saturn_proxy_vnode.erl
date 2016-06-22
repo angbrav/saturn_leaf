@@ -349,11 +349,12 @@ handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
-handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=PendingOps, receivers=Receivers, staleness=Staleness}) ->
+handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=_Connector0, pops=_PendingOps, receivers=_Receivers, staleness=_Staleness}) ->
     VV_LST1 = dict:store(Partition, Clock, VV_LST0),
-    GST = compute_gst(VV_LST1),
-    {Connector1, Staleness1} = flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness),                    
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, staleness=Staleness1}};
+    %GST = compute_gst(VV_LST1),
+    %{Connector1, Staleness1} = flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness),                    
+    %{noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, staleness=Staleness1}};
+    {noreply, S0#state{vv_lst=VV_LST1}};
 
 handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers, staleness=Staleness}) ->
     LST = lists:foldl(fun(Id, Min) ->
