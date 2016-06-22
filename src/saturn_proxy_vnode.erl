@@ -620,11 +620,12 @@ is_stable([], _TimeStamp) ->
     true;
 
 is_stable([{DC, Clock}|T], TimeStamp) ->
-    case dict:find(DC, TimeStamp) of
-        {ok, Clock2} when (Clock>=Clock2) ->
-            is_stable(T, TimeStamp);
-        error ->
-            is_stable(T, TimeStamp);
-        _ ->
-            false
-    end.
+    true.
+   % case dict:find(DC, TimeStamp) of
+   %     {ok, Clock2} when (Clock>=Clock2) ->
+   %         is_stable(T, TimeStamp);
+   %     error ->
+   %         is_stable(T, TimeStamp);
+   %     _ ->
+   %         false
+   % end.
