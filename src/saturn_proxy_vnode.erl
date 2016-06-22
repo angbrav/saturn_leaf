@@ -457,48 +457,45 @@ compute_gst(VV_LST, NLeaves, MyId) ->
                        end, GST0, dict:fetch_keys(VV_LST)),
     dict:erase(MyId, Dict).
 
-flush_remotes(_, _GST, _Connector0, _Receivers, Staleness, Left) ->
-    {Left, Staleness}.
-%flush_remotes([], _GST, _Connector0, _Receivers, Staleness, Left) ->
-%    {Left, Staleness};
+flush_remotes([], _GST, _Connector0, _Receivers, Staleness, Left) ->
+    {Left, Staleness};
 
-%flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
-%    {TimeStamp, _Sender, {Type, Payload}} = Next,
-%    case is_stable(dict:to_list(GST), TimeStamp) of
-%        true ->
-%            {_Connector1, Staleness1} = handle_operation(Type, Payload, Connector0, Receivers, Staleness),
-%            flush_remotes(Rest, GST, Connector0, Receivers, Staleness1, Left);
-%        false ->
-%            flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
-%    end.
+flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
+    {TimeStamp, _Sender, {Type, Payload}} = Next,
+    case is_stable(dict:to_list(GST), TimeStamp) of
+        true ->
+            {_Connector1, Staleness1} = handle_operation(Type, Payload, Connector0, Receivers, Staleness),
+            flush_remotes(Rest, GST, Connector0, Receivers, Staleness1, Left);
+        false ->
+            flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
+    end.
 
     
-flush_pending_operations(PendingsBase, _GST, Connector, _Receivers, Staleness) ->
-    {PendingsBase, Connector, Staleness}.
-    %lists:foldl(fun({Entry, Queue}, {Pendings0, Connector0, Staleness0}) ->
-    %                {Head, Tail, Table} = Queue,
-    %                {{NewHead, NewTail, Table}, Connector1, Staleness1} = flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers, Staleness0),
-    %                Pendings1 = dict:store(Entry, {NewHead, NewTail, Table}, Pendings0),
-    %                {Pendings1, Connector1, Staleness1}
-    %            end, {dict:new(), Connector, Staleness}, dict:to_list(PendingsBase)).
+flush_pending_operations(PendingsBase, GST, Connector, Receivers, Staleness) ->
+    lists:foldl(fun({Entry, Queue}, {Pendings0, Connector0, Staleness0}) ->
+                    {Head, Tail, Table} = Queue,
+                    {{NewHead, NewTail, Table}, Connector1, Staleness1} = flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers, Staleness0),
+                    Pendings1 = dict:store(Entry, {NewHead, NewTail, Table}, Pendings0),
+                    {Pendings1, Connector1, Staleness1}
+                end, {dict:new(), Connector, Staleness}, dict:to_list(PendingsBase)).
    
-%flush_pending_operations_internal(Head, Head, Table, _GST, Connector0, _Receivers, Staleness) ->
-%    {{0, 0, Table}, Connector0, Staleness};
+flush_pending_operations_internal(Head, Head, Table, _GST, Connector0, _Receivers, Staleness) ->
+    {{0, 0, Table}, Connector0, Staleness};
 
-%flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers, Staleness) ->
-%    case ets:lookup(Table, Head) of
-%        [{Head, {TimeStamp, _Sender, {Type, Payload}}}] ->
-%                case is_stable(dict:to_list(GST), TimeStamp) of
-%                    true ->
-%                        {Connector1, Staleness1} = handle_operation(Type, Payload, Connector0, Receivers, Staleness),
-%                        true = ets:delete(Table, Head),
-%                        flush_pending_operations_internal(Head+1, Tail, Table, GST, Connector1, Receivers, Staleness1);
-%                    false ->
-%                        {{Head, Tail, Table}, Connector0, Staleness}
-%                end;
-%        _ ->
-%            {{Head, Tail, Table}, Connector0}
-%    end.
+flush_pending_operations_internal(Head, Tail, Table, GST, Connector0, Receivers, Staleness) ->
+    case ets:lookup(Table, Head) of
+        [{Head, {TimeStamp, _Sender, {Type, Payload}}}] ->
+                case is_stable(dict:to_list(GST), TimeStamp) of
+                    true ->
+                        {Connector1, Staleness1} = handle_operation(Type, Payload, Connector0, Receivers, Staleness),
+                        true = ets:delete(Table, Head),
+                        flush_pending_operations_internal(Head+1, Tail, Table, GST, Connector1, Receivers, Staleness1);
+                    false ->
+                        {{Head, Tail, Table}, Connector0, Staleness}
+                end;
+        _ ->
+            {{Head, Tail, Table}, Connector0}
+    end.
 
 handle_operation(Type, Payload, Connector0, Receivers, Staleness) ->
     case Type of
@@ -624,13 +621,12 @@ merge_client_gst(GST, Clients) ->
 is_stable([], _TimeStamp) ->
     true;
 
-is_stable([{_DC, _Clock}|_T], _TimeStamp) ->
-    true.
-   % case dict:find(DC, TimeStamp) of
-   %     {ok, Clock2} when (Clock>=Clock2) ->
-   %         is_stable(T, TimeStamp);
-   %     error ->
-   %         is_stable(T, TimeStamp);
-   %     _ ->
-   %         false
-   % end.
+is_stable([{DC, Clock}|T], TimeStamp) ->
+    case dict:find(DC, TimeStamp) of
+        {ok, Clock2} when (Clock>=Clock2) ->
+            is_stable(T, TimeStamp);
+        error ->
+            is_stable(T, TimeStamp);
+        _ ->
+            false
+    end.
