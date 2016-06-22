@@ -364,7 +364,7 @@ handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_
     Max = max(dict:fetch(MyId, VV0), PhysicalClock0),
     VVRemote1 = lists:foldl(fun(Id, Acc) ->
                                 Clock = dict:fetch(Id, Acc),
-                                case Clock < Max of
+                                case ((Clock + ?HEARTBEAT_FREQ*1000) < Max) of
                                     true ->
                                         Receiver = dict:fetch(Id, Receivers),
                                         saturn_leaf_converger:heartbeat(Receiver, Partition, Max, MyId),
