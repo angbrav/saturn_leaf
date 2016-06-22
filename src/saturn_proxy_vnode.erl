@@ -364,7 +364,7 @@ handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_
     Max = max(dict:fetch(MyId, VV0), PhysicalClock0),
     VVRemote1 = lists:foldl(fun(Id, Acc) ->
                                 Clock = dict:fetch(Id, Acc),
-                                case Clock < Max of
+                                case ((Clock + ?HEARTBEAT_FREQ*1000) < Max) of
                                     true ->
                                         Receiver = dict:fetch(Id, Receivers),
                                         saturn_leaf_converger:heartbeat(Receiver, Partition, Max, MyId),
@@ -382,12 +382,13 @@ handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
-handle_command({new_lst, Partition, Vector}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=Pendings, receivers=Receivers, staleness=Staleness, remotes=Remotes0, manager=Manager, myid=MyId}) ->
+handle_command({new_lst, Partition, Vector}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=Pendings, receivers=_Receivers, staleness=Staleness, remotes=Remotes0, manager=_Manager, myid=_MyId}) ->
     VV_LST1 = dict:store(Partition, Vector, VV_LST0),
-    GST = compute_gst(VV_LST1, Manager#state_manager.nleaves, MyId),
-    {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings, GST, Connector0, Receivers, Staleness),                    
-    {Remotes1, Staleness2} = flush_remotes(Remotes0, GST, Connector1, Receivers, Staleness1, []),
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}};
+    %GST = compute_gst(VV_LST1, Manager#state_manager.nleaves, MyId),
+    %{Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings, GST, Connector0, Receivers, Staleness),                    
+    %{Remotes1, Staleness2} = flush_remotes(Remotes0, GST, Connector1, Receivers, Staleness1, []),
+    %{noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}};
+    {noreply, S0#state{vv_lst=VV_LST1, connector=Connector0, pops=Pendings, remotes=Remotes0, staleness=Staleness}};
 
 handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=Pendings, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers, staleness=Staleness, remotes=Remotes0, manager=Manager, myid=MyId}) ->
     VV_LST1=dict:store(Partition, VV, VV_LST0),
@@ -469,6 +470,7 @@ flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
             flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
     end.
 
+    
 flush_pending_operations(PendingsBase, GST, Connector, Receivers, Staleness) ->
     lists:foldl(fun({Entry, Queue}, {Pendings0, Connector0, Staleness0}) ->
                     {Head, Tail, Table} = Queue,
