@@ -38,7 +38,7 @@ update(ETS, Payload) ->
             case (TSMax<TimeStamp) of
                 true ->
                     Max1 = {TimeStamp, Value},
-                    List1 = [List|Max1];
+                    List1 = List++[Max1];
                 false ->
                     Max1 = Max,
                     List1 = orddict:store(TimeStamp, Value, List)
@@ -63,7 +63,7 @@ read(ETS, Payload)->
                 latest ->
                     {ok, {ValueMax, TSMax}};
                 _ ->
-                    lager:info("get_version: list ~p, bkey: ~p", [List, BKey]),
+                    %lager:info("get_version: list ~p, bkey: ~p", [List, BKey]),
                     get_version(List, Version, {empty, 0})
             end
     end.
@@ -72,7 +72,7 @@ get_version([], _Version, Previous) ->
     {ok, Previous};
 
 get_version([Next|Rest], Version, Previous) ->
-    lager:info("Next is ~p", [Next]),
+    %lager:info("Next is ~p", [Next]),
     {TimeStamp, Value} = Next,
     case (TimeStamp > Version) of
         true ->
