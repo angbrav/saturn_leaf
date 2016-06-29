@@ -43,7 +43,7 @@ update(ETS, Payload) ->
             end,
             case Length of
                 ?VERSION_THOLD ->
-                    true = ets:insert(ETS, {BKey, {Length, lists:droplast(List1)}});
+                    true = ets:insert(ETS, {BKey, {Length, lists:sublist(List1, ?VERSION_THOLD)}});
                 _ ->
                     true = ets:insert(ETS, {BKey, {Length+1,List1}})
             end
