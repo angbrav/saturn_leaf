@@ -150,7 +150,10 @@ handle_label({value, Label}, Queue, Ops, Staleness) ->
                 sync ->
                     riak_core_vnode:reply(Client, {ok, {Value, 0}});
                 async ->
-                    gen_server:reply(Client, {ok, {Value, 0}})
+                    gen_server:reply(Client, {ok, {Value, 0}});
+                tx ->
+                    BKey = Payload#payload_reply.bkey,
+                    gen_fsm:send_event(Client, {new_value, BKey, Value})
             end,
             {_, Queue1} = ets_queue:out(Queue),
             handle_label(ets_queue:peek(Queue1), Queue1, Ops, Staleness);
