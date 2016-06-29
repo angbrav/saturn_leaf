@@ -44,6 +44,9 @@
 
 -export([read/3,
          async_read/4,
+         fsm_read/4,
+         fsm_idle/2,
+         async_txread/4,
          update/4,
          async_update/5,
          propagate/4,
@@ -60,6 +63,8 @@
                 max_ts,
                 connector,
                 last_label,
+                read_fsms,
+                pending_readtxs,
                 manager,
                 myid}).
 
@@ -107,6 +112,24 @@ async_read(Node, BKey, Clock, Client) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
+async_txread(Node, BKeys, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_txread, BKeys, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+fsm_read(Node, BKey, Clock, Fsm) ->
+    riak_core_vnode_master:command(Node,
+                                   {fsm_read, BKey, Clock, Fsm},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+fsm_idle(Node, Fsm) ->
+    riak_core_vnode_master:command(Node,
+                                   {fsm_idle, Fsm},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
 heartbeat(Node) ->
     riak_core_vnode_master:command(Node,
                                    heartbeat,
@@ -137,13 +160,26 @@ remote_read(Node, Label) ->
                                    ?PROXY_MASTER).
 
 
+init_prop_fsms(_Vnode, Queue0, 0) ->
+    {ok, Queue0};
+
+init_prop_fsms(Vnode, Queue0, Rest) ->
+    {ok, FsmRef} = read_tx_coord_fsm:start_link(Vnode),
+    Queue1 = queue:in(FsmRef, Queue0),
+    init_prop_fsms(Vnode, Queue1, Rest-1).
+
+
 init([Partition]) ->
+    {ok, ReadFsms} = init_prop_fsms({Partition, node()}, queue:new(), ?N_READ_FSMS),
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
+    Name = list_to_atom(integer_to_list(Partition) ++ "pending_readtx"),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 max_ts=0,
                 last_label=none,
+                read_fsms=ReadFsms,
+                pending_readtxs=ets_queue:new(Name),
                 connector=Connector,
                 manager=Manager}}.
 
@@ -174,10 +210,11 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, pending_readtxs=PendingReadTxs}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     {reply, ok, S0#state{max_ts=0,
                          last_label=none,
+                         pending_readtxs=ets_queue:clean(PendingReadTxs),
                          connector=Connector1}};
 
 handle_command({init_proxy, MyId}, _From, S0) ->
@@ -213,6 +250,42 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             {noreply, S1}
     end;
 
+handle_command({async_txread, BKeys, Clock, Client}, _From, S0=#state{read_fsms=ReadFsms0, pending_readtxs=PendingReadTxs0, max_ts=MaxTS0}) ->
+    case queue:out(ReadFsms0) of
+        {{value, Idle}, ReadFsms1} ->
+            PhysicalClock = saturn_utilities:now_microsec(),
+            ReadTime = max(Clock, max(PhysicalClock, MaxTS0)),
+            gen_fsm:send_event(Idle, {new_tx, BKeys, ReadTime, Client}),
+            {noreply, S0#state{max_ts=ReadTime, read_fsms=ReadFsms1}};
+        {empty, ReadFsms0} ->
+            PendingReadTxs1 = ets_queue:in({BKeys, Clock, Client}, PendingReadTxs0),
+            {noreply, S0#state{pending_readtxs=PendingReadTxs1}}
+    end;
+
+handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0) ->
+    case do_read(tx, BKey, Clock, Fsm, S0) of
+        {error, Reason} ->
+            gen_fsm:send_event(Fsm, {error, Reason}), 
+            {noreply, S0};
+        {ok, {Value, _Version}} ->
+            gen_fsm:send_event(Fsm, {new_value, BKey, Value}), 
+            {noreply, S0};
+        {remote, S1} ->
+            {noreply, S1}
+    end;
+
+handle_command({fsm_idle, Fsm}, _From, S0=#state{read_fsms=ReadFsms0, pending_readtxs=PendingReadTxs0, max_ts=MaxTS0}) ->
+    case ets_queue:out(PendingReadTxs0) of
+        {empty, _} ->
+            ReadFsms1 = queue:in(Fsm, ReadFsms0),
+            {noreply, S0#state{read_fsms=ReadFsms1}};
+        {{value, {BKeys, Clock, Client}}, PendingReadTxs1} ->
+            PhysicalClock = saturn_utilities:now_microsec(),
+            ReadTime = max(Clock, max(PhysicalClock, MaxTS0)),
+            gen_fsm:send_event(Fsm, {new_tx, BKeys, ReadTime, Client}),
+            {noreply, S0#state{max_ts=ReadTime, pending_readtxs=PendingReadTxs1}}
+    end;
+
 handle_command({update, BKey, Value, Clock}, _From, S0) ->
     {{ok, TimeStamp}, S1} = do_update(BKey, Value, Clock, S0),
     {reply, {ok, TimeStamp}, S1};
@@ -222,21 +295,22 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     gen_server:reply(Client, {ok, TimeStamp}),
     {noreply, S1};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0, myid=MyId}) ->
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
+handle_command({propagate, BKey, Value, TimeStamp}, _From, S0=#state{connector=Connector0, myid=MyId}) ->
+    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
     saturn_leaf_converger:handle(MyId, completed),
     {noreply, S0#state{connector=Connector1}};
     
 handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     BKeyToRead = Label#label.bkey,
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKeyToRead}),
+    Payload = Label#label.payload,
+    Version = Payload#payload_remote.version,
+    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKeyToRead, Version}),
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(PhysicalClock, MaxTS0+1),
-    Payload = Label#label.payload,
     Client = Payload#payload_remote.client,
     Type = Payload#payload_remote.type_call,
     Source = Label#label.sender,
-    NewLabel = create_label(remote_reply, {routing, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type}),
+    NewLabel = create_label(remote_reply, {routing, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type, bkey=BKeyToRead}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
 
@@ -298,14 +372,20 @@ create_label(Operation, BKey, TimeStamp, Node, Id, Payload) ->
 do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=Partition, connector=Connector, manager=Manager}) ->
     Groups = Manager#state_manager.groups,
     Tree = Manager#state_manager.tree,
+    case Type of
+        tx ->
+            Version = Clock;
+        _ ->
+            Version = latest
+    end,
     case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
         {ok, MyId} ->    
-            ?BACKEND_CONNECTOR:read(Connector, {BKey});
+            ?BACKEND_CONNECTOR:read(Connector, {BKey, Version});
         {ok, Id} ->
             %Remote read
             PhysicalClock = saturn_utilities:now_microsec(),
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=Type}),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=Type, version=Version}),
             saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
             {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
