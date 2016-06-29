@@ -33,7 +33,7 @@ update(ETS, Payload) ->
     {BKey, Value, TimeStamp} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
-            true =  ets:insert(ETS, {BKey, {1,{TimeStamp, Value},[{TimeStamp, Value}]}});
+            true =  ets:insert(ETS, {BKey, {1,{TimeStamp, Value},orddict:store(TimeStamp, Value, orddict:new())}});
         [{BKey, {Length,{TSMax, _ValueMax}=Max,List}}] ->
             case (TSMax<TimeStamp) of
                 true ->
