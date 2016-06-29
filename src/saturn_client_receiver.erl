@@ -45,7 +45,7 @@ handle(update, [BKey, Value, Clock]) ->
     gen_server:call({local, ?MODULE}, {update, BKey, Value, Clock}, infinity);
 
 handle(read_tx, [BKeys, Clock]) ->
-    gen_server:call({local, ?MODULE}, {update, BKeys, Clock}, infinity).
+    gen_server:call({local, ?MODULE}, {read_tx, BKeys, Clock}, infinity).
 
 init([]) ->
     lager:info("Client receiver started at ~p", [reg_name()]),
