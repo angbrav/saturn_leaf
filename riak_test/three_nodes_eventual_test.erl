@@ -61,6 +61,7 @@ confirm() ->
 
     three_sequential_writes_test(Leaf1, Leaf2, Leaf3),
     remote_read_test(Leaf1, Leaf2, Leaf3),
+    tx_test(Leaf1, Leaf2, Leaf3),
 
     pass.
     
@@ -133,3 +134,44 @@ remote_read_test(Leaf1, _Leaf2, Leaf3) ->
 
     Result3 = saturn_test_utilities:eventual_read(BKey, Leaf3, 1),
     ?assertMatch({ok, {1,_}}, Result3).
+
+tx_test(Leaf1, _Leaf2, Leaf3) ->
+    lager:info("Test started: tx_test"),
+    
+    BKey1={1, key4},
+    BKey2={3, key5},
+    BKey3={1, key6},
+    
+    %% Reading a key thats empty
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey1, 0]),
+    %Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
+
+    %% Update key
+    {_, Clock1} = Result2 = rpc:call(Leaf1, saturn_leaf, update, [BKey1, 1, 0]),
+    ?assertMatch({ok, _}, Result2),
+
+    {_, Clock2} = Result3 = rpc:call(Leaf1, saturn_leaf, update, [BKey2, 2, Clock1]),
+    ?assertMatch({ok, _}, Result3),
+
+    {_, _Clock3} = Result4 = rpc:call(Leaf1, saturn_leaf, update, [BKey3, 3, Clock2]),
+    ?assertMatch({ok, _}, Result4),
+
+    {_, {_, _Clock4}} = Result5 = saturn_test_utilities:eventual_read(BKey3, Leaf3, 3),
+    ?assertMatch({ok, {3, _}}, Result5),
+
+    true = eventual_readtx(Leaf3, [BKey1, BKey2, BKey3], [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}]).
+
+eventual_readtx(Node, BKeys, Expected) ->
+    ExpectedSorted = lists:sort(Expected),
+    {ok, {Values, _}} = gen_server:call({saturn_client_receiver, Node}, {read_tx, BKeys, clock}, infinity),
+    ValuesSorted = lists:sort(Values),
+    case ValuesSorted of
+        ExpectedSorted ->
+            lager:info("Correct: ~p", [ValuesSorted]),
+            true;
+        _ ->
+            lager:info("I read: ~p, expecting: ~p",[ValuesSorted, ExpectedSorted]),
+            timer:sleep(500),
+            eventual_readtx(Node, BKeys, Expected)
+    end.

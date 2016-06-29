@@ -57,3 +57,5 @@
 %-define(STALENESS, mock_stats_handler).
 -define(STALENESS, stats_cdf_handler).
 -define(PERCENTILES, 20).
+
+-define(N_READ_FSMS, 12).

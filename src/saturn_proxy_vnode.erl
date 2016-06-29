@@ -45,6 +45,9 @@
 -export([read/3,
          update/4,
          async_read/4,
+         fsm_read/3,
+         fsm_idle/2,
+         async_txread/4,
          async_update/5,
          propagate/4,
          remote_read/2,
@@ -60,6 +63,8 @@
                 staleness,
                 connector,
                 receivers,
+                read_fsms,
+                pending_readtxs,
                 manager,
                 myid}).
 
@@ -75,6 +80,24 @@ read(Node, BKey, Clock) ->
 async_read(Node, BKey, Clock, Client) ->
     riak_core_vnode_master:command(Node,
                                    {async_read, BKey, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+async_txread(Node, BKeys, Clock, Client) ->
+    riak_core_vnode_master:command(Node,
+                                   {async_txread, BKeys, Clock, Client},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+fsm_read(Node, BKey, Fsm) ->
+    riak_core_vnode_master:command(Node,
+                                   {fsm_read, BKey, Fsm},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
+fsm_idle(Node, Fsm) ->
+    riak_core_vnode_master:command(Node,
+                                   {fsm_idle, Fsm},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -131,7 +154,16 @@ collect_stats(Node, From, Type) ->
                                         {collect_stats, From, Type},
                                         ?PROXY_MASTER).
 
+init_prop_fsms(_Vnode, Queue0, 0) ->
+    {ok, Queue0};
+
+init_prop_fsms(Vnode, Queue0, Rest) ->
+    {ok, FsmRef} = read_tx_coord_fsm:start_link(Vnode),
+    Queue1 = queue:in(FsmRef, Queue0),
+    init_prop_fsms(Vnode, Queue1, Rest-1).
+
 init([Partition]) ->
+    {ok, ReadFsms} = init_prop_fsms({Partition, node()}, queue:new(), ?N_READ_FSMS),
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
     Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
@@ -139,6 +171,8 @@ init([Partition]) ->
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 manager=Manager,
+                pending_readtxs=ets_queue:new(Name),
+                read_fsms=ReadFsms,
                 staleness=Staleness,
                 connector=Connector
                }}.
@@ -184,11 +218,12 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
 
-handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, staleness=Staleness}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, staleness=Staleness, pending_readtxs=PendingReadTxs}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
     Staleness1 = ?STALENESS:clean(Staleness, Name),
     {reply, ok, S0#state{staleness=Staleness1,
+                         pending_readtxs=ets_queue:clean(PendingReadTxs),
                          connector=Connector1}};
 
 handle_command({read, BKey, _Clock}, From, S0) ->
@@ -211,6 +246,38 @@ handle_command({async_read, BKey, _Clock, Client}, _From, S0) ->
             {noreply, S0};
         remote ->
             {noreply, S0}
+    end;
+
+handle_command({async_txread, BKeys, _Clock, Client}, _From, S0=#state{read_fsms=ReadFsms0, pending_readtxs=PendingReadTxs0}) ->
+    case queue:out(ReadFsms0) of
+        {{value, Idle}, ReadFsms1} ->
+            gen_fsm:send_event(Idle, {new_tx, BKeys, Client}),
+            {noreply, S0#state{read_fsms=ReadFsms1}};
+        {empty, ReadFsms0} ->
+            PendingReadTxs1 = ets_queue:in({BKeys, Client}, PendingReadTxs0),
+            {noreply, S0#state{pending_readtxs=PendingReadTxs1}}
+    end;
+
+handle_command({fsm_read, BKey, Fsm}, _From, S0) ->
+    case do_read(tx, BKey, Fsm, S0) of
+        {error, Reason} ->
+            gen_fsm:send_event(Fsm, {error, Reason}), 
+            {noreply, S0};
+        {ok, {Value, _Version}} ->
+            gen_fsm:send_event(Fsm, {new_value, BKey, Value}), 
+            {noreply, S0};
+        remote ->
+            {noreply, S0}
+    end;
+
+handle_command({fsm_idle, Fsm}, _From, S0=#state{read_fsms=ReadFsms0, pending_readtxs=PendingReadTxs0}) ->
+    case ets_queue:out(PendingReadTxs0) of
+        {empty, _} ->
+            ReadFsms1 = queue:in(Fsm, ReadFsms0),
+            {noreply, S0#state{read_fsms=ReadFsms1}};
+        {{value, {BKeys, Client}}, PendingReadTxs1} ->
+            gen_fsm:send_event(Fsm, {new_tx, BKeys, Client}),
+            {noreply, S0#state{pending_readtxs=PendingReadTxs1}}
     end;
 
 handle_command({update, BKey, Value, _Clock}, _From, S0) ->
@@ -243,6 +310,8 @@ handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, stale
             gen_server:reply(Client, {ok, {Value, 0}});
         sync ->
             riak_core_vnode:reply(Client, {ok, {Value, 0}});
+        tx ->
+            gen_fsm:send_event(Client, {new_value, BKey, Value});
         _ ->
             lager:error("Unknown type of call")
     end,
