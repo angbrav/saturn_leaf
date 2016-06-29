@@ -33,22 +33,19 @@ update(ETS, Payload) ->
     {BKey, Value, TimeStamp} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
-            true =  ets:insert(ETS, {BKey, {1,{TimeStamp, Value},orddict:store(TimeStamp, Value, orddict:new())}});
-        [{BKey, {Length,{TSMax, _ValueMax}=Max,List}}] ->
+            true =  ets:insert(ETS, {BKey, {1, [{TimeStamp, Value}]}});
+        [{BKey, {Length,[{TSMax, _MaxValue}|_Rest]=List}}] ->
             case (TSMax<TimeStamp) of
                 true ->
-                    Max1 = {TimeStamp, Value},
-                    List1 = [List|Max1];
+                    List1 = [{TimeStamp, Value}|List];
                 false ->
-                    Max1 = Max,
                     List1 = orddict:store(TimeStamp, Value, List)
             end,
             case Length of
                 ?VERSION_THOLD ->
-                    [_Smallest|List2] = List1,
-                    true = ets:insert(ETS, {BKey, {Length,Max1,List2}});
+                    true = ets:insert(ETS, {BKey, {Length, lists:droplast(List1)}});
                 _ ->
-                    true = ets:insert(ETS, {BKey, {Length+1,Max1,List1}})
+                    true = ets:insert(ETS, {BKey, {Length+1,List1}})
             end
     end,
     {ok, ETS}.
@@ -58,26 +55,26 @@ read(ETS, Payload)->
     case ets:lookup(ETS, BKey) of
         [] ->
             {ok, {empty, 0}};
-        [{BKey, {_Length,{TSMax, ValueMax},List}}] ->
+        [{BKey, {_Length,[{TSMax, ValueMax}|_Rest]=List}}] ->
             case Version of
                 latest ->
                     {ok, {ValueMax, TSMax}};
                 _ ->
-                    get_version(List, Version, {empty, 0})
+                    get_version(List, Version)
             end
     end.
 
-get_version([], _Version, Previous) ->
-    {ok, Previous};
+get_version([], _Version) ->
+    {ok, {empty, 0}};
 
-get_version([Next|Rest], Version, Previous) ->
-    lager:info("Next is ~p", [Next]),
+get_version([Next|Rest], Version) ->
+    %lager:info("Next is ~p", [Next]),
     {TimeStamp, Value} = Next,
     case (TimeStamp > Version) of
         true ->
-            {ok, Previous};
+            get_version(Rest, Version);
         false ->
-            get_version(Rest, Version, {Value, TimeStamp})
+            {ok, {Value, TimeStamp}}
     end.
 
 connect([Partition]) ->
