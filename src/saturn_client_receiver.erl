@@ -36,13 +36,16 @@
 reg_name() -> list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)). 
 
 start_link() ->
-    gen_server:start({global, reg_name()}, ?MODULE, [], []).
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
 handle(read, [BKey, Clock]) ->
-    gen_server:call({global, reg_name()}, {read, BKey, Clock}, infinity);
+    gen_server:call({local, ?MODULE}, {read, BKey, Clock}, infinity);
 
 handle(update, [BKey, Value, Clock]) ->
-    gen_server:call({global, reg_name()}, {update, BKey, Value, Clock}, infinity).
+    gen_server:call({local, ?MODULE}, {update, BKey, Value, Clock}, infinity);
+
+handle(read_tx, [BKeys, Clock]) ->
+    gen_server:call({local, ?MODULE}, {read_tx, BKeys, Clock}, infinity).
 
 init([]) ->
     lager:info("Client receiver started at ~p", [reg_name()]),
@@ -50,6 +53,10 @@ init([]) ->
 
 handle_call({read, BKey, Clock}, From, S0) ->
     saturn_leaf:async_read(BKey, Clock, From),
+    {noreply, S0};
+
+handle_call({read_tx, BKeys, Clock}, From, S0) ->
+    saturn_leaf:async_txread(BKeys, Clock, From),
     {noreply, S0};
 
 handle_call({update, BKey, Value, Clock}, From, S0) ->
