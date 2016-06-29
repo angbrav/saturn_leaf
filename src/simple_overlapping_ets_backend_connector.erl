@@ -63,6 +63,7 @@ read(ETS, Payload)->
                 latest ->
                     {ok, {ValueMax, TSMax}};
                 _ ->
+                    lager:info("get_version: list ~p, bkey: ~p", [List, BKey]),
                     get_version(List, Version, {empty, 0})
             end
     end.
