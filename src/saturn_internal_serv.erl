@@ -89,9 +89,9 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                                     Now = saturn_utilities:now_microsec(),
                                                                     Time = Now + Delay,
                                                                     Queue0 = dict:fetch(Node, Acc1),
-                                                                    lager:info("Inserting into queue: ~p", [Node]),
+                                                                    %lager:info("Inserting into queue: ~p", [Node]),
                                                                     Queue1 = ets_queue:in({Time, Label}, Queue0),
-                                                                    lager:info("New queue: ~p", [Queue1]),
+                                                                    %lager:info("New queue: ~p", [Queue1]),
                                                                     dict:store(Node, Queue1, Acc1);
                                                                 false -> Acc1
                                                             end;
