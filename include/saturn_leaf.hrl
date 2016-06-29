@@ -41,12 +41,14 @@
 -record(payload_reply, {to :: all | non_neg_integer(),
                         client,
                         value,
-                        type_call
+                        type_call,
+                        bkey
                        }).
 
 -record(payload_remote, {to :: all | non_neg_integer(),
                          client,
-                         type_call
+                         type_call,
+                         version
                         }).
 
 -record(state_manager, {tree,
@@ -58,3 +60,6 @@
 %-define(STALENESS, mock_stats_handler).
 -define(STALENESS, stats_cdf_handler).
 -define(PERCENTILES, 20).
+
+-define(N_READ_FSMS, 12).
+-define(VERSION_THOLD, 10).
