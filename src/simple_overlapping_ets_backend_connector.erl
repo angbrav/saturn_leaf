@@ -29,18 +29,54 @@
          clean/2
         ]).
 
-update(ETS, Payload)->
+update(ETS, Payload) ->
     {BKey, Value, TimeStamp} = Payload,
-    true =  ets:insert(ETS, {BKey, {Value, TimeStamp}}),
+    case ets:lookup(ETS, BKey) of
+        [] ->
+            true =  ets:insert(ETS, {BKey, {1,{TimeStamp, Value},[{TimeStamp, Value}]}});
+        [{BKey, {Length,{TSMax, _ValueMax}=Max,List}}] ->
+            case (TSMax<TimeStamp) of
+                true ->
+                    Max1 = {TimeStamp, Value},
+                    List1 = [List|Max1];
+                false ->
+                    Max1 = Max,
+                    List1 = orddict:store(TimeStamp, Value, List)
+            end,
+            case Length of
+                ?VERSION_THOLD ->
+                    [_Smallest|List2] = List1,
+                    true = ets:insert(ETS, {BKey, {Length,Max1,List2}});
+                _ ->
+                    true = ets:insert(ETS, {BKey, {Length+1,Max1,List1}})
+            end
+    end,
     {ok, ETS}.
 
 read(ETS, Payload)->
-    {BKey} = Payload,
+    {BKey, Version} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
             {ok, {empty, 0}};
-        [{BKey, Value}] ->
-            {ok, Value}
+        [{BKey, {_Length,{TSMax, ValueMax},List}}] ->
+            case Version of
+                latest ->
+                    {ok, {ValueMax, TSMax}};
+                _ ->
+                    get_version(List, Version, {empty, 0})
+            end
+    end.
+
+get_version([], _Version, Previous) ->
+    {ok, Previous};
+
+get_version([Next|Rest], Version, Previous) ->
+    {TimeStamp, Value} = Next,
+    case (TimeStamp > Version) of
+        true ->
+            {ok, Previous};
+        false ->
+            get_version(Rest, Version, {Value, TimeStamp})
     end.
 
 connect([Partition]) ->
