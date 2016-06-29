@@ -33,7 +33,8 @@
 -include("riak_backend_test.hrl").
 
 server_name(Node)->
-    {global, list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_client_receiver))}.
+    %{global, list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_client_receiver))}.
+    {saturn_client_receiver, Node}.
 
 eventual_read(Key, Node, ExpectedResult) ->
     eventual_read(Key, Node, ExpectedResult, 0).
