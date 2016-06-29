@@ -71,6 +71,7 @@ get_version([], _Version, Previous) ->
     {ok, Previous};
 
 get_version([Next|Rest], Version, Previous) ->
+    lager:info("Next is ~p", [Next]),
     {TimeStamp, Value} = Next,
     case (TimeStamp > Version) of
         true ->
