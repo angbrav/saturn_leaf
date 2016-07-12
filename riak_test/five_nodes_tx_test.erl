@@ -117,6 +117,7 @@ confirm() ->
     five_nodes_test(Leaf1, Leaf2, Leaf3),
     remote_read_async_test(Leaf1, Leaf3),
     writetx_local_test(Leaf1, Leaf3),
+    writetx_remote_read_test(Leaf1, Leaf3),
 
     ok = saturn_test_utilities:stop_datastore([1,2,3]),
 
@@ -188,6 +189,28 @@ writetx_local_test(Leaf1, Leaf3) ->
     BKey1={1, key7},
     BKey2={1, key8},
     BKey3={1, key9},
+
+    {ok, {Values, _}} = gen_server:call(saturn_test_utilities:server_name(Leaf1), {read_tx, [BKey1, BKey2, BKey3], 0}, infinity),
+    ValuesSorted = lists:sort(Values),
+    ExpectedSorted = lists:sort([{BKey1, empty}, {BKey2, empty}, {BKey3, empty}]),
+    ?assertMatch(ExpectedSorted, ValuesSorted),
+
+    {ok, _Clock0} = gen_server:call(saturn_test_utilities:server_name(Leaf1), {write_tx, [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}], 0}, infinity),
+
+    {_, {_, Clock1}} = Result1 = saturn_test_utilities:eventual_da_read(BKey1, Leaf3, 1),
+    ?assertMatch({ok, {1, _}}, Result1),
+
+    {ok, {Values1, _}} = gen_server:call(saturn_test_utilities:server_name(Leaf3), {read_tx, [BKey1, BKey2, BKey3], Clock1}, infinity),
+    ValuesSorted1 = lists:sort(Values1),
+    ExpectedSorted1 = lists:sort([{BKey1, 1}, {BKey2, 2}, {BKey3, 3}]),
+    ?assertMatch(ExpectedSorted1, ValuesSorted1).
+
+writetx_remote_read_test(Leaf1, Leaf3) ->
+    lager:info("Test started: writetx_remote_read_test"),
+
+    BKey1={1, key10},
+    BKey2={3, key11},
+    BKey3={1, key12},
 
     {ok, {Values, _}} = gen_server:call(saturn_test_utilities:server_name(Leaf1), {read_tx, [BKey1, BKey2, BKey3], 0}, infinity),
     ValuesSorted = lists:sort(Values),
