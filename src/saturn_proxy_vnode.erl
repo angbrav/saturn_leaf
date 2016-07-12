@@ -64,8 +64,8 @@
          async_txwrite/4,
          prepare/5,
          remote_prepare/5,
-         commit/2,
-         remote_write_tx/3,
+         commit/3,
+         remote_write_tx/4,
          remote_fsm_idle/2,
          check_ready/1]).
 
@@ -222,15 +222,15 @@ remote_prepare(Node, TxId, Number, TimeStamp, Fsm) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-commit(Node, TxId) ->
+commit(Node, TxId, Remote) ->
     riak_core_vnode_master:command(Node,
-                                   {commit, TxId},
+                                   {commit, TxId, Remote},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-remote_write_tx(Node, BKeys, TimeStamp) ->
+remote_write_tx(Node, Origin, BKeys, TimeStamp) ->
     riak_core_vnode_master:command(Node,
-                                   {remote_write_tx, BKeys, TimeStamp},
+                                   {remote_write_tx, Origin, BKeys, TimeStamp},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -520,13 +520,13 @@ handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared
     gen_fsm:send_event(Fsm, {prepared, Ignored, {Partition, node()}}),
     {noreply, S0}; 
 
-handle_command({remote_write_tx, BKeys, Clock}, _From, S0=#state{remote_fsms=RemoteFsms0, pending_remotetxs=PendingRemoteTxs0}) ->
+handle_command({remote_write_tx, Node, BKeys, Clock}, _From, S0=#state{remote_fsms=RemoteFsms0, pending_remotetxs=PendingRemoteTxs0}) ->
     case queue:out(RemoteFsms0) of
         {{value, Idle}, RemoteFsms1} ->
-            gen_fsm:send_event(Idle, {new_tx, BKeys, Clock}),
+            gen_fsm:send_event(Idle, {new_tx, Node, BKeys, Clock}),
             {noreply, S0#state{remote_fsms=RemoteFsms1}};
         {empty, RemoteFsms0} ->
-            PendingRemoteTxs1 = ets_queue:in({BKeys, Clock}, PendingRemoteTxs0),
+            PendingRemoteTxs1 = ets_queue:in({Node, BKeys, Clock}, PendingRemoteTxs0),
             {noreply, S0#state{pending_remotetxs=PendingRemoteTxs1}}
     end;
 
@@ -535,17 +535,19 @@ handle_command({remote_fsm_idle, Fsm}, _From, S0=#state{remote_fsms=RemoteFsms0,
         {empty, _} ->
             RemoteFsms1 = queue:in(Fsm, RemoteFsms0),
             {noreply, S0#state{remote_fsms=RemoteFsms1}};
-        {{value, {BKeys, Clock}}, PendingRemoteTxs1} ->
-            gen_fsm:send_event(Fsm, {new_tx, BKeys, Clock}),
+        {{value, {Node, BKeys, Clock}}, PendingRemoteTxs1} ->
+            gen_fsm:send_event(Fsm, {new_tx, Node, BKeys, Clock}),
             {noreply, S0#state{pending_remotetxs=PendingRemoteTxs1}}
     end;
 
 handle_command({remote_prepare, TxId, Number, TimeStamp, Fsm}, _From, S0=#state{data=Data, remote=Remote0, key_prepared=KeyPrepared, prepared_tx=PreparedTx, partition=Partition}) ->
+    %lager:info("Remote prepare (~p) for TxId: ~p, Number: ~p and TimeStamp: ~p", [Partition, TxId, Number, TimeStamp]),
     case ets:lookup(Data, TxId) of
         [] ->
             Remote1 = dict:store(TxId, {Number, Fsm}, Remote0),
             {noreply, S0#state{remote=Remote1}};
         List ->
+            %lager:info("I (~p) already have the data ~p", [Partition, List]),
             case length(List) of
                 Number ->
                     Remote1 = do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx),
@@ -557,27 +559,22 @@ handle_command({remote_prepare, TxId, Number, TimeStamp, Fsm}, _From, S0=#state{
             end
     end;
 
-handle_command({commit, TxId}, _From, S0=#state{prepared_tx=PreparedTx,
+handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
                                                 key_prepared=KeyPrepared,
                                                 myid=MyId,
                                                 manager=Manager,
                                                 receivers=Receivers,
-                                                partition=Partition,
                                                 pending_reads=PendingReads,
                                                 pending_counter=PendingCounter,
                                                 connector=Connector0}) ->
     [{TxId, {Pairs, TimeStamp}}] = ets:lookup(PreparedTx, TxId),
     Connector1 = lists:foldl(fun({BKey, Value}, Acc0) ->
                                 {ok, Acc1} = ?BACKEND_CONNECTOR:update(Acc0, {BKey, Value, TimeStamp}),
-                                case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
-                                    {ok, Group} ->
-                                        lists:foreach(fun(Id) ->
-                                                        Receiver = dict:fetch(Id, Receivers),
-                                                        Label = {TimeStamp, {Partition, node()}},
-                                                        saturn_data_receiver:data(Receiver, Label, BKey, Value)
-                                                      end, Group);
-                                    {error, Reason2} ->
-                                        lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+                                case Remote of
+                                    false ->
+                                        propagate(TxId, BKey, Value, Manager#state_manager.groups, MyId, Receivers);
+                                    true ->
+                                        noop
                                 end,
                                 [{BKey, Orddict0}] = ets:lookup(KeyPrepared, BKey),
                                 true = ets:insert(KeyPrepared, {BKey, clean_key_prepared(Orddict0, TimeStamp, TxId, [])}),
@@ -814,3 +811,14 @@ clean_key_prepared([{TimeStamp, List0}|Rest], TimeStamp, TxId, NewOrddict) ->
 
 clean_key_prepared([Next|Rest], TimeStamp, TxId, NewOrddict) ->
     clean_key_prepared(Rest, TimeStamp, TxId, [Next|NewOrddict]).
+
+propagate(TxId, BKey, Value, Groups, MyId, Receivers) ->
+    case groups_manager:get_datanodes_ids(BKey, Groups, MyId) of
+        {ok, Group} ->
+            lists:foreach(fun(Id) ->
+                            Receiver = dict:fetch(Id, Receivers),
+                            saturn_data_receiver:data(Receiver, TxId, BKey, Value)
+                          end, Group);
+        {error, Reason2} ->
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+end.

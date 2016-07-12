@@ -43,6 +43,7 @@
           clock,
           myid,
           involved,
+          txid,
           total :: integer()}).
 
 %%%===================================================================
@@ -61,7 +62,8 @@ init([VNode, MyId]) ->
     State = #state{vnode=VNode, myid=MyId},
     {ok, idle, State, 0}.
 
-idle({new_tx, BKeys, Clock}, S0=#state{vnode=VNode}) ->
+idle({new_tx, Node, BKeys, Clock}, S0) ->
+    TxId = {Clock, Node},
     Scattered = lists:foldl(fun(BKey, Acc) ->
                                 DocIdx = riak_core_util:chash_key(BKey),
                                 PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
@@ -69,9 +71,9 @@ idle({new_tx, BKeys, Clock}, S0=#state{vnode=VNode}) ->
                                 dict:append(IndexNode, BKey, Acc)
                             end, dict:new(), BKeys),
     lists:foreach(fun({IndexNode, ListBKeys}) ->
-                    saturn_proxy_vnode:remote_prepare(IndexNode, {Clock, VNode}, length(ListBKeys), Clock, self())
+                    saturn_proxy_vnode:remote_prepare(IndexNode, TxId, length(ListBKeys), Clock, self())
                   end, dict:to_list(Scattered)),
-    {next_state, collect_prepare, S0#state{total=length(Scattered), clock=Clock, involved=[]}, 10000};
+    {next_state, collect_prepare, S0#state{total=dict:size(Scattered), clock=Clock, involved=[], txid=TxId}, 10000};
 
 idle(_, S0) ->
     {next_state, idle, S0}.
@@ -82,12 +84,12 @@ collect_prepare({error, Reason}, S0=#state{myid=MyId, vnode=VNode, clock=Clock})
     saturn_proxy_vnode:write_fsm_idle(VNode, self()),
     {next_state, idle, S0};
     
-collect_prepare({prepared, false, IndexNode}, S0=#state{total=Total, vnode=VNode, clock=Clock, involved=Involved0}) ->
+collect_prepare({prepared, false, IndexNode}, S0=#state{total=Total, involved=Involved0, txid=TxId}) ->
     Involved = [IndexNode|Involved0],
     case Total of
         1 ->
             lists:foreach(fun(Elem) ->
-                            saturn_proxy_vnode:commit(Elem, {Clock, VNode})
+                            saturn_proxy_vnode:commit(Elem, TxId, true)
                           end, Involved),
             {next_state, reply_client, S0#state{total=0}, 0};
         _ ->

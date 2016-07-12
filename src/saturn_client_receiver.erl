@@ -45,7 +45,10 @@ handle(update, [BKey, Value, Clock]) ->
     gen_server:call({local, ?MODULE}, {update, BKey, Value, Clock}, infinity);
 
 handle(read_tx, [BKeys, Clock]) ->
-    gen_server:call({local, ?MODULE}, {read_tx, BKeys, Clock}, infinity).
+    gen_server:call({local, ?MODULE}, {read_tx, BKeys, Clock}, infinity);
+
+handle(write_tx, [Pairs, Clock]) ->
+    gen_server:call({local, ?MODULE}, {write_tx, Pairs, Clock}, infinity).
 
 init([]) ->
     lager:info("Client receiver started at ~p", [reg_name()]),
@@ -57,6 +60,10 @@ handle_call({read, BKey, Clock}, From, S0) ->
 
 handle_call({read_tx, BKeys, Clock}, From, S0) ->
     saturn_leaf:async_txread(BKeys, Clock, From),
+    {noreply, S0};
+
+handle_call({write_tx, Pairs, Clock}, From, S0) ->
+    saturn_leaf:async_txwrite(Pairs, Clock, From),
     {noreply, S0};
 
 handle_call({update, BKey, Value, Clock}, From, S0) ->

@@ -71,7 +71,7 @@ idle({new_tx, BKeyValuePairs, Clock, Client}, S0=#state{vnode=VNode}) ->
     lists:foreach(fun({IndexNode, Pairs}) ->
                     saturn_proxy_vnode:prepare(IndexNode, {Clock, VNode}, Pairs, Clock, self())
                   end, dict:to_list(Scattered)),
-    {next_state, collect_prepare, S0#state{total=length(Scattered), client=Client, clock=Clock, involved=[]}, 10000};
+    {next_state, collect_prepare, S0#state{total=dict:size(Scattered), client=Client, clock=Clock, involved=[]}, 10000};
 
 idle(_, S0) ->
     {next_state, idle, S0}.
@@ -91,7 +91,7 @@ collect_prepare({prepared, Ignore, IndexNode}, S0=#state{total=Total, vnode=VNod
     case Total of
         1 ->
             lists:foreach(fun(Elem) ->
-                            saturn_proxy_vnode:commit(Elem, {Clock, VNode})
+                            saturn_proxy_vnode:commit(Elem, {Clock, VNode}, false)
                           end, Involved),
             {next_state, reply_client, S0#state{total=0}, 0};
         _ ->

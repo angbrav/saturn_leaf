@@ -8,6 +8,7 @@
          read/2,
          async_read/3,
          async_txread/3,
+         async_txwrite/3,
          async_update/4,
          clean/1,
          collect_stats/3,
@@ -52,6 +53,13 @@ async_txread([{Bucket, Key}|_Rest]=BKeys, Clock, Client) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:async_txread(IndexNode, BKeys, Clock, Client).
+
+async_txwrite([Pair|_Rest]=Pairs, Clock, Client) ->
+    {{Bucket, Key}, _Value} = Pair,
+    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:async_txwrite(IndexNode, Pairs, Clock, Client).
 
 clean(MyId) ->
     ok = saturn_leaf_producer:clean_state(MyId), 

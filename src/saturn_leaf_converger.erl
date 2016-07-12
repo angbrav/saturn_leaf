@@ -167,10 +167,11 @@ handle_label(Label) ->
         write_tx ->
             [BKey|_Tail] = BKeys = Label#label.bkey,
             Clock = Label#label.timestamp,
+            Node = Label#label.node,
             DocIdx = riak_core_util:chash_key(BKey),
             PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
             [{IndexNode, _Type}] = PrefList,
-            saturn_proxy_vnode:remote_write_tx(IndexNode, BKeys, Clock),
+            saturn_proxy_vnode:remote_write_tx(IndexNode, Node, BKeys, Clock),
             true
     end.
 
