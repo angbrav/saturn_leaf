@@ -62,6 +62,7 @@ init([VNode]) ->
     {ok, idle, State, 0}.
 
 idle({new_tx, BKeys, Clock, Client}, S0) ->
+    %lager:info("New readtx with BKeys: ~p", [BKeys]),
     lists:foreach(fun(BKey) ->
                     DocIdx = riak_core_util:chash_key(BKey),
                     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
@@ -78,6 +79,7 @@ collect_reads({error, Reason}, S0=#state{client=Client}) ->
     {next_state, idle, S0};
     
 collect_reads({new_value, BKey, Value}, S0=#state{result=Result0, total=Total}) ->
+    %lager:info("New_value: ~p", [{BKey, Value}]),
     case Total of
         1 ->
             {next_state, reply_client, S0#state{result=[{BKey, Value}|Result0], total=0}, 0};

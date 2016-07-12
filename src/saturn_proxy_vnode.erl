@@ -365,6 +365,7 @@ handle_command({data, TxId, BKey, Value}, _From, S0=#state{data=Data,
                                                            partition=Partition,
                                                            myid=MyId,
                                                            prepared_tx=PreparedTx}) ->
+    %lager:info("I have received remote update: TxId ~p, BKey ~p, Value ~p", [TxId, BKey, Value]),
     case dict:find(TxId, Remote0) of
         {ok, {1, Fsm}} ->
             {TimeStamp, _Node} = TxId,
@@ -411,7 +412,7 @@ handle_command({async_txread, BKeys, Clock, Client}, _From, S0=#state{read_fsms=
             {noreply, S0#state{pending_readtxs=PendingReadTxs1}}
     end;
 
-handle_command({fsm_read, BKey, Clock, Fsm}, From, S0=#state{myid=MyId,
+handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0=#state{myid=MyId,
                                                               max_ts=MaxTS0,
                                                               partition=Partition,
                                                               connector=Connector,
@@ -446,7 +447,7 @@ handle_command({fsm_read, BKey, Clock, Fsm}, From, S0=#state{myid=MyId,
             %Remote read
             PhysicalClock = saturn_utilities:now_microsec(),
             TimeStamp = max(Clock, max(PhysicalClock, MaxTS0+1)),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=tx, version=Clock}),
+            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=Fsm, type_call=tx, version=Clock}),
             saturn_leaf_producer:new_label(MyId, Label, Partition, false),
             {noreply, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
@@ -612,6 +613,7 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
 
 handle_command({propagate, BKey, TimeStamp, Node}, _From, S0=#state{connector=Connector0, myid=MyId, remote=Remote0, data=Data}) ->
     Id = {TimeStamp, Node},
+    %lager:info("I have received the metadata: TxId ~p, BKey ~p", [Id, BKey]),
     case ets:lookup(Data, Id) of
         [] ->
             Remote1 = dict:store(Id, single, Remote0),
@@ -619,6 +621,7 @@ handle_command({propagate, BKey, TimeStamp, Node}, _From, S0=#state{connector=Co
         [{Id, {BKey, Value}}] ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             true = ets:delete(Data, Id),
+            %lager:info("Sending completed"),
             saturn_leaf_converger:handle(MyId, {completed, TimeStamp}),
             {noreply, S0#state{connector=Connector1}}
     end;

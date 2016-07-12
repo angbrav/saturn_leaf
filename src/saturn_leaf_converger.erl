@@ -70,7 +70,6 @@ handle_cast({completed, TimeStamp}, S0=#state{labels_queue=Labels0, min_pending=
     end;
 
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, min_pending=Min0}) ->
-    %lager:info("New stream received. Label: ~p", Stream),
     case ets_queue:is_empty(Labels0) of
         true ->
             {Min1, Stream1} = dealwith_stream(Stream, Min0),
@@ -112,13 +111,13 @@ dealwith_pending({value, Label}, Labels0, [Min|_]=ListMin) ->
                     dealwith_pending(ets_queue:peek(Labels1), Labels1, ListMin)
             end;
         false ->
-            {Min, Labels0}
+            {ListMin, Labels0}
     end.
 
 dealwith_stream([], Min) ->
     {Min, []};
 
-dealwith_stream([Label|Rest], [Min|_]=ListMin) ->
+dealwith_stream([Label|Rest]=Labels, [Min|_]=ListMin) ->
     TimeStamp = Label#label.timestamp,
     case (TimeStamp =< Min) of
         true ->
@@ -129,7 +128,7 @@ dealwith_stream([Label|Rest], [Min|_]=ListMin) ->
                     dealwith_stream(Rest, ListMin)
             end;
         false ->
-            {Min, Rest}
+            {ListMin, Labels}
     end.
 
 handle_label(Label) ->
