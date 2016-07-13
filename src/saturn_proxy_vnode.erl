@@ -67,6 +67,7 @@
          commit/3,
          remote_write_tx/4,
          remote_fsm_idle/2,
+         propagate_remote/3,
          check_ready/1]).
 
 -record(state, {partition,
@@ -240,6 +241,12 @@ remote_fsm_idle(Node, Fsm) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
+propagate_remote(Node, TxId, Pairs) ->
+    riak_core_vnode_master:command(Node,
+                                   {propagate_remote, TxId, Pairs},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+
 init_prop_fsms(_Vnode, _MyId, Reads0, Writes0, Remotes0, 0) ->
     {ok, Reads0, Writes0, Remotes0};
 
@@ -372,7 +379,7 @@ handle_command({data, TxId, BKey, Value}, _From, S0=#state{data=Data,
             true = ets:insert(Data, {TxId, {BKey, Value}}),
             List = ets:lookup(Data, TxId), 
             Remote1 = do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx),
-            gen_fsm:send_event(Fsm, {prepared, false, {Partition, node()}}),
+            gen_fsm:send_event(Fsm, {prepared, {Partition, node()}}),
             {noreply, S0#state{remote=Remote1}};
         {ok, single} ->
             {TimeStamp, _Node} = TxId,
@@ -500,7 +507,7 @@ handle_command({async_txwrite, BKeyValuePairs, Clock, Client}, _From, S0=#state{
 
 handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared_tx=PreparedTx, key_prepared=KeyPrepared, myid=MyId, manager=Manager, partition=Partition}) ->
     true = ets:insert(PreparedTx, {TxId, {Pairs, TimeStamp}}),
-    Ignored = lists:foldl(fun({BKey, Value}, Acc) ->
+    Ignored = lists:foldl(fun({BKey, Value}, {Bool, Remote}) ->
                             case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
                                 true ->
                                     case ets:lookup(KeyPrepared, BKey) of
@@ -510,13 +517,14 @@ handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared
                                             Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                                     end,
                                     true = ets:insert(KeyPrepared, {BKey, Orddict1}),
-                                    false;
+                                    {false, Remote};
                                 false ->
-                                    Acc;
+                                    {Bool, [{BKey, Value}|Remote]};
                                 {error, _Reason1} ->
-                                    Acc
+                                    lager:error("BKey ~p not in the dictionary", [BKey]),
+                                    {Bool, [{BKey, Value}|Remote]}
                             end
-                         end, true, Pairs),
+                         end, {true, []}, Pairs),
     gen_fsm:send_event(Fsm, {prepared, Ignored, {Partition, node()}}),
     {noreply, S0}; 
 
@@ -551,13 +559,21 @@ handle_command({remote_prepare, TxId, Number, TimeStamp, Fsm}, _From, S0=#state{
             case length(List) of
                 Number ->
                     Remote1 = do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx),
-                    gen_fsm:send_event(Fsm, {prepared, false, {Partition, node()}}),
+                    gen_fsm:send_event(Fsm, {prepared, {Partition, node()}}),
                     {noreply, S0#state{remote=Remote1}};
                 Other ->
                     Remote1 = dict:store(TxId, {Number-Other, Fsm}, Remote0),
                     {noreply, S0#state{remote=Remote1}}
             end
     end;
+
+handle_command({propagate_remote, TxId, Pairs}, _From, S0=#state{myid=MyId,
+                                                                 manager=Manager,
+                                                                 receivers=Receivers}) ->
+    lists:foreach(fun({BKey, Value}) ->
+                    propagate(TxId, BKey, Value, Manager#state_manager.groups, MyId, Receivers)
+                  end, Pairs),
+    {noreply, S0};
 
 handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
                                                 key_prepared=KeyPrepared,
@@ -821,4 +837,4 @@ propagate(TxId, BKey, Value, Groups, MyId, Receivers) ->
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-end.
+    end.

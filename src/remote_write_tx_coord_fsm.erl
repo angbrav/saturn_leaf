@@ -84,7 +84,7 @@ collect_prepare({error, Reason}, S0=#state{myid=MyId, vnode=VNode, clock=Clock})
     saturn_proxy_vnode:write_fsm_idle(VNode, self()),
     {next_state, idle, S0};
     
-collect_prepare({prepared, false, IndexNode}, S0=#state{total=Total, involved=Involved0, txid=TxId}) ->
+collect_prepare({prepared, IndexNode}, S0=#state{total=Total, involved=Involved0, txid=TxId}) ->
     Involved = [IndexNode|Involved0],
     case Total of
         1 ->
