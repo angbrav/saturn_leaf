@@ -49,19 +49,22 @@ confirm() ->
     Groups0 = dict:store(1, [0, 1, 2], dict:new()),
     Groups1 = dict:store(2, [0, 1, 2], Groups0),
     Groups2 = dict:store(3, [0, 1], Groups1),
+    Groups3 = dict:store(4, [1, 2], Groups2),
 
     ok = rpc:call(Leaf1, saturn_leaf_receiver, set_tree, [0, Tree2, 3]),
-    ok = rpc:call(Leaf1, saturn_leaf_receiver, set_groups, [0, Groups2]),
+    ok = rpc:call(Leaf1, saturn_leaf_receiver, set_groups, [0, Groups3]),
 
     ok = rpc:call(Leaf2, saturn_leaf_receiver, set_tree, [1, Tree2, 3]),
-    ok = rpc:call(Leaf2, saturn_leaf_receiver, set_groups, [1, Groups2]),
+    ok = rpc:call(Leaf2, saturn_leaf_receiver, set_groups, [1, Groups3]),
 
     ok = rpc:call(Leaf3, saturn_leaf_receiver, set_tree, [2, Tree2, 3]),
-    ok = rpc:call(Leaf3, saturn_leaf_receiver, set_groups, [2, Groups2]),
+    ok = rpc:call(Leaf3, saturn_leaf_receiver, set_groups, [2, Groups3]),
 
     three_sequential_writes_test(Leaf1, Leaf2, Leaf3),
     remote_read_test(Leaf1, Leaf2, Leaf3),
-    tx_test(Leaf1, Leaf2, Leaf3),
+    readtx_test(Leaf1, Leaf2, Leaf3),
+    writetx_test(Leaf1, Leaf2, Leaf3),
+    writetx_remotekey_test(Leaf1, Leaf2, Leaf3),
 
     pass.
     
@@ -135,8 +138,8 @@ remote_read_test(Leaf1, _Leaf2, Leaf3) ->
     Result3 = saturn_test_utilities:eventual_read(BKey, Leaf3, 1),
     ?assertMatch({ok, {1,_}}, Result3).
 
-tx_test(Leaf1, _Leaf2, Leaf3) ->
-    lager:info("Test started: tx_test"),
+readtx_test(Leaf1, _Leaf2, Leaf3) ->
+    lager:info("Test started: readtx_test"),
     
     BKey1={1, key4},
     BKey2={3, key5},
@@ -161,6 +164,39 @@ tx_test(Leaf1, _Leaf2, Leaf3) ->
     ?assertMatch({ok, {3, _}}, Result5),
 
     true = eventual_readtx(Leaf3, [BKey1, BKey2, BKey3], [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}]).
+
+writetx_test(Leaf1, _Leaf2, Leaf3) ->
+    lager:info("Test started: writetx_test"),
+
+    BKey1={1, key7},
+    BKey2={1, key8},
+    BKey3={1, key9},
+
+    %% Reading a key thats empty
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey1, 0]),
+    %Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
+
+    {ok, 0} = gen_server:call({saturn_client_receiver, Leaf1}, {write_tx, [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}], clock}, infinity),
+
+    true = eventual_readtx(Leaf3, [BKey1, BKey2, BKey3], [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}]).
+
+writetx_remotekey_test(Leaf1, _Leaf2, Leaf3) ->
+    lager:info("Test started: writetx_remotekey_test"),
+
+    BKey1={1, key10},
+    BKey2={4, key11},
+    BKey3={3, key12},
+    
+    %% Reading a key thats empty
+    Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey1, 0]),
+    %Result1=rpc:call(Leaf1, saturn_leaf, read, [BKey, 0]),
+    ?assertMatch({ok, {empty, 0}}, Result1),
+            
+    {ok, 0} = gen_server:call({saturn_client_receiver, Leaf1}, {write_tx, [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}], clock}, infinity),
+
+    true = eventual_readtx(Leaf3, [BKey1, BKey2, BKey3], [{BKey1, 1}, {BKey2, 2}, {BKey3, 3}]).
+
 
 eventual_readtx(Node, BKeys, Expected) ->
     ExpectedSorted = lists:sort(Expected),
