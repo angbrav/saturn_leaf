@@ -10,6 +10,7 @@
          async_update/4,
          spawn_wrapper/4,
          async_txread/3,
+         async_txwrite/3,
          clean/0,
          collect_stats/2
         ]).
@@ -52,6 +53,12 @@ async_txread([{Bucket, Key}|_Rest]=BKeys, Clock, Client) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:async_txread(IndexNode, BKeys, Clock, Client).
+
+async_txwrite([{BKey, _Value}|_Rest]=Pairs, Clock, Client) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:async_txwrite(IndexNode, Pairs, Clock, Client).
 
 clean() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
