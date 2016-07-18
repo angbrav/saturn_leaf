@@ -49,7 +49,7 @@
          async_txread/4,
          update/4,
          async_update/5,
-         propagate/4,
+         propagate/5,
          heartbeat/1,
          init_proxy/2,
          remote_read/2,
@@ -68,6 +68,7 @@
          remote_write_tx/4,
          remote_fsm_idle/2,
          propagate_remote/3,
+         collect_stats/3,
          check_ready/1]).
 
 -record(state, {partition,
@@ -89,6 +90,7 @@
                 read_id,
                 data,
                 remote,
+                staleness,
                 myid}).
 
 %% API
@@ -182,9 +184,9 @@ async_update(Node, BKey, Value, Clock, Client) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-propagate(Node, BKey, TimeStamp, OriginNode) ->
+propagate(Node, BKey, TimeStamp, SenderId, OriginNode) ->
     riak_core_vnode_master:command(Node,
-                                   {propagate, BKey, TimeStamp, OriginNode},
+                                   {propagate, BKey, TimeStamp, SenderId, OriginNode},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -247,6 +249,11 @@ propagate_remote(Node, TxId, Pairs) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
+collect_stats(Node, From, Type) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {collect_stats, From, Type},
+                                        ?PROXY_MASTER).
+
 init_prop_fsms(_Vnode, _MyId, Reads0, Writes0, Remotes0, 0) ->
     {ok, Reads0, Writes0, Remotes0};
 
@@ -276,6 +283,8 @@ init([Partition]) ->
     PendingReads = ets:new(Name5, [set, named_table, private]),
     Data = ets:new(Name6, [bag, named_table, private]),
     PendingCounter = ets:new(Name8, [set, named_table, private]),
+    NameStaleness = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness = ?STALENESS:init(NameStaleness),
     lager:info("Vnode init"),
     {ok, #state{partition=Partition,
                 max_ts=0,
@@ -289,6 +298,7 @@ init([Partition]) ->
                 pending_reads=PendingReads,
                 remote=dict:new(),
                 data=Data,
+                staleness=Staleness,
                 pending_counter=PendingCounter,
                 read_id=0,
                 manager=Manager}}.
@@ -318,6 +328,9 @@ handle_command({check_tables_ready}, _Sender, SD0) ->
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
+handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
+    {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
+
 handle_command(clean_state, _Sender, S0=#state{connector=Connector0,
                                                partition=Partition,
                                                pending_readtxs=PendingReadTxs,
@@ -326,18 +339,22 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0,
                                                key_prepared=KeyPrepared0,
                                                pending_reads=PendingReads0,
                                                pending_remotetxs=PendingRemoteTxs,
+                                               staleness=Staleness,
                                                pending_counter=PendingCounter}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     true = ets:delete_all_objects(PreparedTx0),
     true = ets:delete_all_objects(KeyPrepared0),
     true = ets:delete_all_objects(PendingReads0),
     true = ets:delete_all_objects(PendingCounter),
+    Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
+    Staleness1 = ?STALENESS:clean(Staleness, Name),
     {reply, ok, S0#state{max_ts=0,
                          last_label=none,
                          pending_readtxs=ets_queue:clean(PendingReadTxs),
                          pending_writetxs=ets_queue:clean(PendingWriteTxs),
                          pending_remotetxs=ets_queue:clean(PendingRemoteTxs),
                          read_id=0,
+                         staleness=Staleness1,
                          connector=Connector1}};
 
 handle_command({init_proxy, MyId}, _From, S0=#state{partition=Partition}) ->
@@ -371,6 +388,7 @@ handle_command({data, TxId, BKey, Value}, _From, S0=#state{data=Data,
                                                            key_prepared=KeyPrepared,
                                                            partition=Partition,
                                                            myid=MyId,
+                                                           staleness=Staleness,
                                                            prepared_tx=PreparedTx}) ->
     %lager:info("I have received remote update: TxId ~p, BKey ~p, Value ~p", [TxId, BKey, Value]),
     case dict:find(TxId, Remote0) of
@@ -381,12 +399,13 @@ handle_command({data, TxId, BKey, Value}, _From, S0=#state{data=Data,
             Remote1 = do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx),
             gen_fsm:send_event(Fsm, {prepared, {Partition, node()}}),
             {noreply, S0#state{remote=Remote1}};
-        {ok, single} ->
+        {ok, {single, Sender}} ->
             {TimeStamp, _Node} = TxId,
+            Staleness1 = ?STALENESS:add_update(Staleness, Sender, TimeStamp),
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             Remote1 = dict:erase(TxId, Remote0),
             saturn_leaf_converger:handle(MyId, {completed, TimeStamp}),
-            {noreply, S0#state{connector=Connector1, remote=Remote1}};
+            {noreply, S0#state{connector=Connector1, remote=Remote1, staleness=Staleness1}};
         {ok, {Left, Fsm}} ->
             Remote1 = dict:store(TxId, {Left-1, Fsm}, Remote0),
             {noreply, S0#state{remote=Remote1}};
@@ -624,34 +643,37 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     gen_server:reply(Client, {ok, TimeStamp}),
     {noreply, S1};
 
-handle_command({propagate, BKey, TimeStamp, Node}, _From, S0=#state{connector=Connector0, myid=MyId, remote=Remote0, data=Data}) ->
+handle_command({propagate, BKey, TimeStamp, Sender, Node}, _From, S0=#state{connector=Connector0, myid=MyId, remote=Remote0, data=Data, staleness=Staleness}) ->
     Id = {TimeStamp, Node},
     %lager:info("I have received the metadata: TxId ~p, BKey ~p", [Id, BKey]),
     case ets:lookup(Data, Id) of
         [] ->
-            Remote1 = dict:store(Id, single, Remote0),
+            Remote1 = dict:store(Id, {single, Sender}, Remote0),
             {noreply, S0#state{remote=Remote1}};
         [{Id, {BKey, Value}}] ->
+            Staleness1 = ?STALENESS:add_update(Staleness, Sender, TimeStamp),
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             true = ets:delete(Data, Id),
             %lager:info("Sending completed"),
             saturn_leaf_converger:handle(MyId, {completed, TimeStamp}),
-            {noreply, S0#state{connector=Connector1}}
+            {noreply, S0#state{connector=Connector1, staleness=Staleness1}}
     end;
     
-handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
+handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector, staleness=Staleness}) ->
+    Sender = Label#label.sender,
+    TimeStamp = Label#label.timestamp,
+    Staleness1 = ?STALENESS:add_remote(Staleness, Sender, TimeStamp),
     BKeyToRead = Label#label.bkey,
     Payload = Label#label.payload,
     Version = Payload#payload_remote.version,
     {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKeyToRead, Version}),
     PhysicalClock = saturn_utilities:now_microsec(),
-    TimeStamp = max(PhysicalClock, MaxTS0+1),
+    NewTimeStamp = max(PhysicalClock, MaxTS0+1),
     Client = Payload#payload_remote.client,
     Type = Payload#payload_remote.type_call,
-    Source = Label#label.sender,
-    NewLabel = create_label(remote_reply, {routing, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Source, client=Client, type_call=Type, bkey=BKeyToRead}),
+    NewLabel = create_label(remote_reply, {routing, routing}, NewTimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Sender, client=Client, type_call=Type, bkey=BKeyToRead}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
-    {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel}};
+    {noreply, S0#state{max_ts=NewTimeStamp, last_label=NewLabel, staleness=Staleness1}};
 
 handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
