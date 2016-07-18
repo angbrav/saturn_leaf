@@ -52,7 +52,7 @@
          remote_reply/5,
          send_heartbeat/1,
          heartbeat/3,
-         new_lst/3,
+         new_gst/2,
          compute_times/1,
          set_receivers/2,
          set_tree/4,
@@ -64,7 +64,6 @@
 -record(state, {partition,
                 vv :: dict(),
                 vv_remote :: dict(),
-                vv_lst :: dict(),
                 gst :: dict(),
                 last_physical,
                 connector,
@@ -136,9 +135,9 @@ heartbeat(Node, Clock, Sender) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-new_lst(Node, Partition, Clock) ->
+new_gst(Node, GST) ->
     riak_core_vnode_master:command(Node,
-                                   {new_lst, Partition, Clock},
+                                   {new_gst, GST},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -182,7 +181,6 @@ init([Partition]) ->
     {ok, #state{partition=Partition,
                 vv=dict:new(),
                 vv_remote=dict:new(),
-                vv_lst=dict:new(),
                 gst=dict:new(),
                 manager=Manager,
                 last_physical=0,
@@ -215,7 +213,7 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv_lst=VV_LST0, vv_remote=VVRemote0, pops=Pendings0, partition=Partition}) ->
+handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, vv_remote=VVRemote0, pops=Pendings0, partition=Partition}) ->
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
@@ -228,12 +226,9 @@ handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv
                                 Table = ets:new(Name, [set, named_table, private]),
                                 dict:store(Entry, {0, 0, Table}, Acc)
                             end, Pendings0, FilteredEntries),
-    VV_LST1 = lists:foldl(fun(Entry, Acc) ->
-                            dict:store(Entry, VV1, Acc)
-                         end, VV_LST0, Partitions),
-    {reply, ok, S0#state{vv=VV1, vv_lst=VV_LST1, vv_remote=VVRemote1, gst=VVRemote1, myid=MyId, pops=Pendings1}};
+    {reply, ok, S0#state{vv=VV1, vv_remote=VVRemote1, gst=VVRemote1, myid=MyId, pops=Pendings1}};
 
-handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition, pops=Pendings, vv_lst=VV_LST0}) ->
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition, pops=Pendings}) ->
     Entries = lists:seq(0, NLeaves-1),
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
@@ -251,10 +246,7 @@ handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manage
                                 Table = ets:new(Name, [set, named_table, private]),
                                 dict:store(Entry, {0, 0, Table}, Acc)
                             end, dict:new(), FilteredEntries),
-    VV_LST1 = lists:foldl(fun(Entry, Acc) ->
-                            dict:store(Entry, VV1, Acc)
-                         end, dict:new(), dict:fetch_keys(VV_LST0)),
-    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}, vv=VV1, gst=VVRemote1, vv_remote=VVRemote1, pops=Pendings1, vv_lst=VV_LST1}};
+    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}, vv=VV1, gst=VVRemote1, vv_remote=VVRemote1, pops=Pendings1}};
 
 handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
@@ -264,7 +256,7 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
 
-handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, vv_lst=VV_LST, pops=Pendings0, staleness=Staleness}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, pops=Pendings0, staleness=Staleness}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     Pendings1 = lists:foldl(fun(Entry, Acc) ->
                                 {_, _, Table0} = dict:fetch(Entry, Pendings0),
@@ -278,7 +270,6 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=P
     VV1 = clean_vector(VV),
     {reply, ok, S0#state{vv=VV1,
                          vv_remote=clean_vector(VVRemote),
-                         vv_lst=clean_lst_vector(VV_LST, VV1),
                          gst=clean_vector(VVRemote),
                          last_physical=0,
                          pops=Pendings1,
@@ -382,31 +373,16 @@ handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
-handle_command({new_lst, Partition, Vector}, _From, S0=#state{vv_lst=VV_LST0, connector=Connector0, pops=Pendings, receivers=_Receivers, staleness=Staleness, remotes=Remotes0, manager=_Manager, myid=_MyId}) ->
-    VV_LST1 = dict:store(Partition, Vector, VV_LST0),
-    %GST = compute_gst(VV_LST1, Manager#state_manager.nleaves, MyId),
-    %{Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings, GST, Connector0, Receivers, Staleness),                    
-    %{Remotes1, Staleness2} = flush_remotes(Remotes0, GST, Connector1, Receivers, Staleness1, []),
-    %{noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}};
-    {noreply, S0#state{vv_lst=VV_LST1, connector=Connector0, pops=Pendings, remotes=Remotes0, staleness=Staleness}};
-
-handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=Pendings, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers, staleness=Staleness, remotes=Remotes0, manager=Manager, myid=MyId}) ->
-    VV_LST1=dict:store(Partition, VV, VV_LST0),
-    GST = compute_gst(VV_LST1, Manager#state_manager.nleaves, MyId),
-    {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings, GST, Connector0, Receivers, Staleness),                    
-    {Remotes1, Staleness2} = flush_remotes(Remotes0, GST, Connector1, Receivers, Staleness1, []),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-    lists:foreach(fun(PrefList) ->
-                    case hd(PrefList) of
-                        {Partition, _Node} ->
-                            noop;
-                        {_OtherPartition, _Node} ->
-                            saturn_proxy_vnode:new_lst(hd(PrefList), Partition, VV)
-                    end
-                  end, GrossPrefLists),
+handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition}) ->
+    saturn_client_receiver:new_clock(node(), Partition, VV),
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}};
+    {noreply, S0};
+
+handle_command({new_gst, GST}, _From, S0=#state{pops=Pendings, connector=Connector0, receivers=Receivers, staleness=Staleness, remotes=Remotes0, myid=MyId}) ->
+    GST1 = dict:erase(MyId, GST),
+    {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings, GST1, Connector0, Receivers, Staleness),                    
+    {Remotes1, Staleness2} = flush_remotes(Remotes0, GST1, Connector1, Receivers, Staleness1, []),
+    {noreply, S0#state{gst=GST1, connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -444,18 +420,6 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
-
-compute_gst(VV_LST, NLeaves, MyId) ->
-    GST0 = lists:foldl(fun(Id, Acc) ->
-                        dict:store(Id, infinity, Acc)
-                       end, dict:new(), lists:seq(0, NLeaves - 1)),
-    Dict = lists:foldl(fun(Partition, Acc0) ->
-                        LST = dict:fetch(Partition, VV_LST),
-                        lists:foldl(fun(Id, Acc1) ->
-                                        dict:store(Id, min(dict:fetch(Id, Acc1), dict:fetch(Id, LST)), Acc1)
-                                    end, Acc0, dict:fetch_keys(LST))
-                       end, GST0, dict:fetch_keys(VV_LST)),
-    dict:erase(MyId, Dict).
 
 flush_remotes([], _GST, _Connector0, _Receivers, Staleness, Left) ->
     {Left, Staleness};
@@ -605,11 +569,6 @@ do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical,
 clean_vector(Vector) ->
     lists:foldl(fun(Entry, Acc) ->
                     dict:store(Entry, 0, Acc)
-                end, dict:new(), dict:fetch_keys(Vector)).
-
-clean_lst_vector(Vector, Init) ->
-    lists:foldl(fun(Entry, Acc) ->
-                    dict:store(Entry, Init, Acc)
                 end, dict:new(), dict:fetch_keys(Vector)).
 
 merge_client_gst(GST, Clients) ->

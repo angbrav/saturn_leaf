@@ -83,11 +83,15 @@ init([MyId]) ->
 handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
     Group0 = lists:seq(0, NLeaves-1),
     Group1 = lists:delete(MyId, Group0),
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    saturn_client_receiver:init_vv(Node, Group0)
+                  end, Nodes),
     Convergers1 = lists:foldl(fun(Id, Acc) ->
                                 {ok, Receivers} = saturn_leaf_receiver:get_receivers(Id),
                                 dict:store(Id, Receivers, Acc)
                               end, dict:new(), Group1),
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
     Partitions = [Partition || [{Partition, _Node}] <- GrossPrefLists],
     {Dict, _} = lists:foldl(fun(PrefList, {Acc, N}) ->
@@ -102,6 +106,10 @@ handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
                                 saturn_proxy_vnode:compute_times(hd(PrefList)),
                                 {dict:store(hd(PrefList), D, Acc), N+1}
                             end, {dict:new(), 1}, GrossPrefLists),
+    Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    erlang:send({saturn_client_receiver, Node}, compute_clocks)
+                  end, Nodes),
     {reply, ok, S0#state{scattered_receivers=Dict}};
 
 handle_call(get_receivers, _From, S0=#state{nodes=Nodes}) ->
@@ -114,6 +122,11 @@ handle_call({set_tree, Tree, Leaves}, _From, S0) ->
     lists:foreach(fun(PrefList) ->
                     ok = saturn_proxy_vnode:set_tree(hd(PrefList), Paths, Tree, Leaves)
                   end, GrossPrefLists),
+    Group0 = lists:seq(0, Leaves-1),
+    Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    saturn_client_receiver:set_tree(Node, Group0)
+                  end, Nodes),
     {reply, ok, S0};
 
 handle_call({set_groups, RGroups}, _From, S0) ->

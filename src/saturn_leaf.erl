@@ -49,6 +49,10 @@ async_read({Bucket, Key}, Clock, Client) ->
 clean() ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    ok = saturn_client_receiver:clean_state(Node)
+                  end, Nodes),
     lists:foreach(fun(PrefList) ->
                     ok = saturn_proxy_vnode:clean_state(hd(PrefList))
                   end, GrossPrefLists),
