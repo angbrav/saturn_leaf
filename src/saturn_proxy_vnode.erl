@@ -52,19 +52,18 @@
          remote_reply/5,
          send_heartbeat/1,
          heartbeat/3,
-         new_lst/3,
          compute_times/1,
          set_receivers/2,
          set_tree/4,
          set_groups/2,
          clean_state/1,
          collect_stats/3,
+         new_gst/2,
          check_ready/1]).
 
 -record(state, {partition,
                 vv :: dict(),
                 vv_remote :: dict(),
-                vv_lst :: dict(),
                 gst,
                 last_physical,
                 connector,
@@ -72,6 +71,8 @@
                 receivers,
                 manager,
                 staleness,
+                parent,
+                children,
                 myid}).
 
 %% API
@@ -135,17 +136,18 @@ heartbeat(Node, Clock, Sender) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-new_lst(Node, Partition, Clock) ->
-    riak_core_vnode_master:command(Node,
-                                   {new_lst, Partition, Clock},
-                                   {fsm, undefined, self()},
-                                   ?PROXY_MASTER).
-
 compute_times(Node) ->
     riak_core_vnode_master:command(Node,
                                    compute_times,
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
+
+new_gst(Node, GST) ->
+    riak_core_vnode_master:command(Node,
+                                   {new_gst, GST},
+                                   {fsm, undefined, self()},
+                                   ?PROXY_MASTER).
+       
 
 set_receivers(Node, Receivers) ->
     riak_core_vnode_master:sync_command(Node,
@@ -183,7 +185,6 @@ init([Partition]) ->
     {ok, #state{partition=Partition,
                 vv=dict:new(),
                 vv_remote=dict:new(),
-                vv_lst=dict:new(),
                 gst=0,
                 manager=Manager,
                 last_physical=0,
@@ -215,7 +216,7 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv_lst=VV_LST0, vv_remote=VVRemote0}) ->
+handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, vv_remote=VVRemote0}) ->
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
@@ -223,10 +224,7 @@ handle_command({init_vv, Entries, Partitions, MyId}, _From, S0=#state{vv=VV0, vv
     VVRemote1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, VVRemote0, FilteredEntries),
-    VV_LST1 = lists:foldl(fun(Partition, Acc) ->
-                            dict:store(Partition, 0, Acc)
-                         end, VV_LST0, Partitions),
-    {reply, ok, S0#state{vv=VV1, vv_lst=VV_LST1, vv_remote=VVRemote1, myid=MyId}};
+    {reply, ok, S0#state{vv=VV1, vv_remote=VVRemote1, myid=MyId}};
 
 handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager}) ->
     {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}}};
@@ -239,7 +237,7 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
 
-handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, vv_lst=VV_LST, pops=POps, staleness=Staleness}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, pops=POps, staleness=Staleness}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     true = ets:delete(POps),
     Name = list_to_atom(integer_to_list(Partition) ++ atom_to_list(gentle_rain_pops)),
@@ -248,7 +246,6 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=P
     Staleness1 = ?STALENESS:clean(Staleness, Name2),
     {reply, ok, S0#state{vv=clean_vector(VV),
                          vv_remote=clean_vector(VVRemote),
-                         vv_lst=clean_vector(VV_LST),
                          gst=0,
                          last_physical=0,
                          pops=POps1,
@@ -345,36 +342,22 @@ handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_
     {noreply, S0#state{vv_remote=VVRemote1, vv=VV1}};
 
 handle_command({heartbeat, Clock, Id}, _From, S0=#state{vv=VV0}) ->
-    %lager:info("Hearbeadt received: ~p from ~p", [Clock, Id]),
+    %lager:info("Heartbeat received: ~p from ~p", [Clock, Id]),
     VV1 = dict:store(Id, Clock, VV0),
     {noreply, S0#state{vv=VV1}};
 
-handle_command({new_lst, Partition, Clock}, _From, S0=#state{vv_lst=VV_LST0, connector=_Connector0, pops=_PendingOps, receivers=_Receivers, staleness=_Staleness}) ->
-    VV_LST1 = dict:store(Partition, Clock, VV_LST0),
-    %GST = compute_gst(VV_LST1),
-    %{Connector1, Staleness1} = flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness),                    
-    %{noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, staleness=Staleness1}};
-    {noreply, S0#state{vv_lst=VV_LST1}};
-
-handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition, pops=PendingOps, connector=Connector0, vv_lst=VV_LST0, receivers=Receivers, staleness=Staleness}) ->
+handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition}) ->
     LST = lists:foldl(fun(Id, Min) ->
                         min(dict:fetch(Id, VV), Min)
                      end, infinity, dict:fetch_keys(VV)),
-    VV_LST1=dict:store(Partition, LST, VV_LST0),
-    GST = compute_gst(VV_LST1),
-    {Connector1, Staleness1} = flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness),                    
-    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
-    lists:foreach(fun(PrefList) ->
-                    case hd(PrefList) of
-                        {Partition, _Node} ->
-                            noop;
-                        {_OtherPartition, _Node} ->
-                            saturn_proxy_vnode:new_lst(hd(PrefList), Partition, LST)
-                    end
-                  end, GrossPrefLists),
+    saturn_client_receiver:new_clock(node(), Partition, LST),
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
-    {noreply, S0#state{vv_lst=VV_LST1, gst=GST, connector=Connector1, staleness=Staleness1}};
+    {noreply, S0};
+
+handle_command({new_gst, GST}, _From, S0=#state{pops=PendingOps, receivers=Receivers, staleness=Staleness, connector=Connector0}) ->
+    %lager:info("New gst ~p", [GST]),
+    {Connector1, Staleness1} = flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness),                    
+    {noreply, S0#state{gst=GST, connector=Connector1, staleness=Staleness1}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -412,11 +395,6 @@ handle_exit(_Pid, _Reason, State) ->
 
 terminate(_Reason, _State) ->
     ok.
-
-compute_gst(VV_LST) ->
-    _GST = lists:foldl(fun(Entry, Min) ->
-                        min(Min, dict:fetch(Entry, VV_LST))
-                       end, infinity, dict:fetch_keys(VV_LST)).
 
 flush_pending_operations(PendingOps, GST, Connector0, Receivers, Staleness) ->
      case ets:first(PendingOps) of
@@ -527,4 +505,3 @@ clean_vector(Vector) ->
     lists:foldl(fun(Entry, Acc) ->
                     dict:store(Entry, 0, Acc)
                 end, dict:new(), dict:fetch_keys(Vector)).
-

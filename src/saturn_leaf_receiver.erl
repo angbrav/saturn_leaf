@@ -69,6 +69,9 @@ init([MyId]) ->
                                 end
                                end, not_found, GrossPrefLists),
     Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    saturn_client_receiver:init_vv(Node)
+                  end, Nodes),
     Convergers = [list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_leaf_converger)) || Node <- Nodes],
     case ZeroPreflist of
         not_found ->
@@ -102,6 +105,10 @@ handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
                                 saturn_proxy_vnode:compute_times(hd(PrefList)),
                                 {dict:store(hd(PrefList), D, Acc), N+1}
                             end, {dict:new(), 1}, GrossPrefLists),
+    Nodes = riak_core_ring:all_members(Ring),
+    lists:foreach(fun(Node) ->
+                    erlang:send({saturn_client_receiver, Node}, compute_clocks)
+                  end, Nodes),
     {reply, ok, S0#state{scattered_receivers=Dict}};
 
 handle_call(get_receivers, _From, S0=#state{nodes=Nodes}) ->
