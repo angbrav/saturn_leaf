@@ -89,7 +89,7 @@ collect_stats_arrival(To, From, Type) ->
     {ok, FinalStats}.
 
 collect_stats_internal(To, From, Type) ->
-    {ok, StatsRaw} = saturn_leaf_internal:collect_stats(To, From, Type),
+    {ok, StatsRaw} = saturn_internal_serv:collect_stats(To, From, Type),
     FinalStats = ?STALENESS:compute_cdf_from_orddict(StatsRaw),
     {ok, FinalStats}.
 
