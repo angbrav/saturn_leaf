@@ -13,6 +13,7 @@
          clean/1,
          collect_stats/2,
          collect_stats_arrival/3,
+         collect_stats_internal/3,
          spawn_wrapper/4
         ]).
 
@@ -84,6 +85,11 @@ collect_stats(From, Type) ->
 
 collect_stats_arrival(To, From, Type) ->
     {ok, StatsRaw} = saturn_leaf_converger:collect_stats(To, From, Type),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(StatsRaw),
+    {ok, FinalStats}.
+
+collect_stats_internal(To, From, Type) ->
+    {ok, StatsRaw} = saturn_leaf_internal:collect_stats(To, From, Type),
     FinalStats = ?STALENESS:compute_cdf_from_orddict(StatsRaw),
     {ok, FinalStats}.
 

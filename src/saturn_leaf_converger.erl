@@ -91,11 +91,11 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, min
                                                         update ->
                                                             Clock = Label#label.timestamp,
                                                             Sender = Label#label.sender,
-                                                            ?STALENESS:add_update(Staleness, Sender, Clock);
+                                                            ?STALENESS:add_update(StaleData, Sender, Clock);
                                                         remote_read ->
                                                             Clock = Label#label.timestamp,
                                                             Sender = Label#label.sender,
-                                                            ?STALENESS:add_remote(Staleness, Sender, Clock);
+                                                            ?STALENESS:add_remote(StaleData, Sender, Clock);
                                                         _ ->
                                                             StaleData
                                                     end,
@@ -108,11 +108,11 @@ handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0, min
                                                         update ->
                                                             Clock = Label#label.timestamp,
                                                             Sender = Label#label.sender,
-                                                            ?STALENESS:add_update(Staleness, Sender, Clock);
+                                                            ?STALENESS:add_update(StaleData, Sender, Clock);
                                                         remote_read ->
                                                             Clock = Label#label.timestamp,
                                                             Sender = Label#label.sender,
-                                                            ?STALENESS:add_remote(Staleness, Sender, Clock);
+                                                            ?STALENESS:add_remote(StaleData, Sender, Clock);
                                                         _ ->
                                                             StaleData
                                                     end,
