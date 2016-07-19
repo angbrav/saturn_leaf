@@ -59,6 +59,9 @@ confirm() ->
 
     ok=rpc:call(Leaf1, saturn_leaf_producer, check_ready, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
+
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0, 2]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 2]),
     
     %% Starting internal1
     {ok, _HostPortInternal1}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4042, 2]),

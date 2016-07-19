@@ -25,7 +25,8 @@
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
 
--define(HEARTBEAT_FREQ, 1000).
+-define(HEARTBEAT_FREQ, 5). %millisec
+-define(STABILIZATION_FREQ, 0). %microsec
 
 %-define(PROPAGATION_MODE, naive_erlang).
 -define(PROPAGATION_MODE, bypass_tree).
@@ -61,5 +62,5 @@
 -define(STALENESS, stats_cdf_handler).
 -define(PERCENTILES, 20).
 
--define(N_READ_FSMS, 12).
+-define(N_FSMS, 5).
 -define(VERSION_THOLD, 10).

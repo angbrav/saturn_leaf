@@ -70,6 +70,9 @@ confirm() ->
     ok=rpc:call(Node1, saturn_leaf_producer, check_ready, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
 
+    ok=rpc:call(Node1, saturn_leaf_receiver, assign_convergers, [0, 2]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 2]),
+
     {ok, _HostPort}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4040, 2]),
 
     Tree0 = dict:store(0, [-1, 300, 50], dict:new()),
@@ -138,7 +141,7 @@ converger_no_interleaving([Node1, Node2])->
     ?assertMatch({ok, {empty, 0}}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label1, 10}]),
+    Result3 = rpc:call(Node2, saturn_data_receiver, data, [{saturn_data_receiver, Node1}, {11, node2}, BKey, 10]),
     ?assertMatch(ok, Result3),
 
     %% Should read remote update
@@ -148,7 +151,7 @@ converger_no_interleaving([Node1, Node2])->
     %% First data then label
     %% Simulate remote arrival of update, to complete remote label
     Label2 = #label{operation=update, bkey=BKey, timestamp=15, node=node3},
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label2, 20}]),
+    Result5 = rpc:call(Node2, saturn_data_receiver, data, [{saturn_data_receiver, Node1}, {15, node3}, BKey, 20]),
     ?assertMatch(ok, Result5),
 
     %% Should not read pending update
@@ -181,7 +184,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch({ok, {empty, 0}}, Result2),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result3 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label2, 30}]),
+    Result3 = rpc:call(Node2, saturn_data_receiver, data, [{saturn_data_receiver, Node1}, {20, node3}, BKey, 30]),
     ?assertMatch(ok, Result3),
 
     %% Should not read pending update
@@ -189,7 +192,7 @@ converger_interleaving([Node1, Node2])->
     ?assertMatch({ok, {empty, 0}}, Result4),
 
     %% Simulate remote arrival of update, to complete remote label
-    Result5 = rpc:call(Node2, saturn_leaf_converger, handle, [0, {new_operation, Label1, 20}]),
+    Result5 = rpc:call(Node2, saturn_data_receiver, data, [{saturn_data_receiver, Node1}, {11, node2}, BKey, 20]),
     ?assertMatch(ok, Result5),
 
     %% Should read remote update

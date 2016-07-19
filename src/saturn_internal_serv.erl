@@ -12,6 +12,7 @@
 -export([restart/1,
          set_tree/3,
          set_groups/2,
+         collect_stats/3,
          handle/2]).
 
 %% ------------------------------------------------------------------
@@ -48,6 +49,9 @@ set_tree(MyId, TreeDict, NLeaves) ->
 set_groups(MyId, Groups) ->
     gen_server:call({global, reg_name(MyId)}, {set_groups, Groups}, infinity).
 
+collect_stats(MyId, From, Type) ->
+    gen_server:call({global, reg_name(MyId)}, {collect_stats, From, Type}, infinity).
+
 %% ------------------------------------------------------------------
 %% gen_server Function Definitions
 %% ------------------------------------------------------------------
@@ -69,13 +73,12 @@ init([MyId]) ->
                           end, dict:new(), dict:to_list(Delays0)),
     {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager}}.
 
+
 handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager}) ->
     Paths = Manager#state_manager.paths,
     Groups = Manager#state_manager.groups,
     NLeaves = Manager#state_manager.nleaves,
     Queues1 = lists:foldl(fun(Label, Acc0) ->
-                            BKey = Label#label.bkey,
-                            {Bucket, _} = BKey,
                             lists:foldl(fun(Node, Acc1) ->
                                             case Node of
                                                 IdSender ->
@@ -83,6 +86,7 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                 _ ->
                                                     case Label#label.operation of
                                                         update ->
+                                                            {Bucket, _} = Label#label.bkey,
                                                             case groups_manager:interested(Node, Bucket, MyId, Groups, NLeaves, Paths) of
                                                                 true ->
                                                                     Delay = dict:fetch(Node, Delays),
@@ -94,6 +98,20 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                                     %lager:info("New queue: ~p", [Queue1]),
                                                                     dict:store(Node, Queue1, Acc1);
                                                                 false -> Acc1
+                                                            end;
+                                                        write_tx ->
+                                                            case groups_manager:filter_tx_keys(Label#label.bkey, Node, MyId, Groups, NLeaves, Paths, []) of
+                                                                {ok, []} -> Acc1;
+                                                                {ok, NewBKeys} ->
+                                                                    Delay = dict:fetch(Node, Delays),
+                                                                    Now = saturn_utilities:now_microsec(),
+                                                                    Time = Now + Delay,
+                                                                    Queue0 = dict:fetch(Node, Acc1),
+                                                                    %lager:info("Inserting into queue: ~p", [Node]),
+                                                                    Label1 = Label#label{bkey=NewBKeys},
+                                                                    Queue1 = ets_queue:in({Time, Label1}, Queue0),
+                                                                    %lager:info("New queue: ~p", [Queue1]),
+                                                                    dict:store(Node, Queue1, Acc1)
                                                             end;
                                                         _ ->
                                                             Payload = Label#label.payload,
@@ -111,7 +129,7 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                             end
                                                     end
                                             end
-                                        end, Acc0, dict:fetch_keys(Queues0))
+                                          end, Acc0, dict:fetch_keys(Queues0))
                           end, Queues0, Stream),
     {Queues2, Busy1} = lists:foldl(fun(Node, {Acc1, Acc2}) ->
                                     case dict:fetch(Node, Busy0) of

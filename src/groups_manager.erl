@@ -11,6 +11,7 @@
          new_treefile/1,
          new_groupsfile/2,
          interested/6,
+         filter_tx_keys/7,
          get_mypath/2,
          get_bucket_sample/2,
          is_leaf/2,
@@ -177,20 +178,39 @@ filter_stream_leaf_id(Stream0, Tree, NLeaves, MyId, Groups, Paths) ->
     Row = dict:fetch(MyId, Tree),
     Internal = find_internal(Row, 0, NLeaves),
     Stream1 = lists:foldl(fun({BKey, Elem}, Acc) ->
-                            {Bucket, _Key} = BKey,
                             case Elem#label.operation of
                                 update ->
+                                    {Bucket, _Key} = BKey,
                                     case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
                                         true ->
-                                            Acc ++ [Elem];
+                                            [Elem|Acc];
                                         false ->
                                             Acc
+                                    end;
+                                write_tx ->
+                                    case filter_tx_keys(BKey, Internal, MyId, Groups, NLeaves, Paths, []) of
+                                        {ok, []} ->
+                                            Acc;
+                                        {ok, NewBKeys} ->
+                                            [Elem#label{bkey=NewBKeys}|Acc]
                                     end;
                                 _ ->
                                     Acc ++ [Elem]
                                 end
                           end, [], Stream0),
-    {ok, Stream1, Internal}.
+    {ok, lists:reverse(Stream1), Internal}.
+
+filter_tx_keys([], _Internal, _MyId, _Groups, _NLeaves, _Paths, NewBKeys) ->
+    {ok, NewBKeys};
+
+filter_tx_keys([BKey|Rest], Internal, MyId, Groups, NLeaves, Paths, NewBKeys) ->
+    {Bucket, _Key} = BKey,
+    case interested(Internal, Bucket, MyId, Groups, NLeaves, Paths) of
+        true ->
+            filter_tx_keys(Rest, Internal, MyId, Groups, NLeaves, Paths, [BKey|NewBKeys]);
+        false ->
+            filter_tx_keys(Rest, Internal, MyId, Groups, NLeaves, Paths, NewBKeys)
+    end.
 
 on_path(Id, Id, _PreId, _Paths, _NLeaves) ->
     true;

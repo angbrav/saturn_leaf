@@ -6,38 +6,62 @@
 -include_lib("eunit/include/eunit.hrl").
 -endif.
 
--export([init/0,
-         add_remote/2,
-         add_update/2,
+-export([init/1,
+         add_remote/3,
+         add_update/3,
+         compute_raw/3,
+         merge_raw/2,
          compute_cdf/3,
-         clean/1]).
+         compute_cdf_from_orddict/1,
+         clean/2]).
 
-init() ->
-    Updates = ets:new(staleness_updates, [set, named_table, private]),
-    Remotes = ets:new(staleness_remotes, [set, named_table, private]),
+init(Name) ->
+    NUpdates = list_to_atom(atom_to_list(Name) ++ "_updates"),
+    NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
+    Updates = ets:new(NUpdates, [set, named_table, private]),
+    Remotes = ets:new(NRemotes, [set, named_table, private]),
     {0, Updates, 0, Remotes}.
 
-clean(Data) ->
+clean(Data, Name) ->
     {_IdUp, Updates, _IdRem, Remotes} = Data,
     true = ets:delete(Updates),
     true = ets:delete(Remotes),
-    Updates = ets:new(staleness_updates, [set, named_table, private]),
-    Remotes = ets:new(staleness_remotes, [set, named_table, private]),
+    NUpdates = list_to_atom(atom_to_list(Name) ++ "_updates"),
+    NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
+    Updates = ets:new(NUpdates, [set, named_table, private]),
+    Remotes = ets:new(NRemotes, [set, named_table, private]),
     {0, Updates, 0, Remotes}.
 
-add_remote(Data, Label) ->
-    Sender = Label#label.sender,
-    Dif = saturn_utilities:now_microsec() - Label#label.timestamp,
+add_remote(Data, Sender, TimeStamp) ->
+    Dif = saturn_utilities:now_microsec() - TimeStamp,
     {IdUp, Updates, IdRem, Remotes} = Data,
     true = ets:insert(Remotes, {IdRem, {Sender, Dif}}),
     {IdUp, Updates, IdRem+1, Remotes}.
 
-add_update(Data, Label) ->
-    Sender = Label#label.sender,
-    Dif = saturn_utilities:now_microsec() - Label#label.timestamp,
+add_update(Data, Sender, TimeStamp) ->
+    Dif = saturn_utilities:now_microsec() - TimeStamp,
     {IdUp, Updates, IdRem, Remotes} = Data,
     true = ets:insert(Updates, {IdUp, {Sender, Dif}}),
     {IdUp+1, Updates, IdRem, Remotes}.
+
+compute_raw(Data, From, Type) ->
+    case Type of
+        updates ->
+            {IdUp, Updates, _IdRem, _Remotes} = Data,
+            get_ordered(From, Updates, IdUp);
+        remotes ->
+            {_IdUp, _Updates, IdRem, Remotes} = Data,
+            get_ordered(From, Remotes, IdRem)
+    end.
+
+merge_raw(FinalList, NewList) ->
+    lists:foldl(fun({Time, _List}, Acc) ->
+                    orddict:append(Time, v, Acc)
+                end, FinalList, NewList).
+
+compute_cdf_from_orddict(List) ->
+    ListSteps = get_liststeps(List),
+    generate_percentiles(List, 0, ListSteps, []).
 
 compute_cdf(Data, From, Type) ->
     case Type of
@@ -88,7 +112,7 @@ generate_percentiles([Next|Rest], Counter, [NextStep|RestSteps]=Steps, Times) ->
         false ->
             generate_percentiles(Rest, Counter+length(List), Steps, Times)
     end.
-
+    
 -ifdef(TEST).
 
 get_ordered_test() ->

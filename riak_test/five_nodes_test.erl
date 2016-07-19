@@ -44,6 +44,7 @@ confirm() ->
     rt:wait_until_ring_converged(Cluster4),
     rt:wait_until_ring_converged(Cluster5),
 
+
     Leaf1 = hd(Cluster1),
     Leaf2 = hd(Cluster2),
     Leaf3 = hd(Cluster3),
@@ -75,6 +76,10 @@ confirm() ->
     ok=rpc:call(Leaf1, saturn_leaf_producer, check_ready, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
     ok=rpc:call(Leaf3, saturn_leaf_producer, check_ready, [2]),
+
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0, 3]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 3]),
+    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2, 3]),
 
     %% Starting internal1
     {ok, _HostPortInternal1}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4043, 3]),

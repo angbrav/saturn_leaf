@@ -19,7 +19,7 @@
 %% under the License.
 %%  
 %% -------------------------------------------------------------------
--module(saturn_client_receiver).
+-module(saturn_data_receiver).
 -behaviour(gen_server).
 
 -include("saturn_leaf.hrl").
@@ -31,44 +31,28 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([handle/2]).
+-export([data/4]).
 
-reg_name() -> list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)). 
-
+               
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
-handle(read, [BKey, Clock]) ->
-    gen_server:call({local, ?MODULE}, {read, BKey, Clock}, infinity);
-
-handle(update, [BKey, Value, Clock]) ->
-    gen_server:call({local, ?MODULE}, {update, BKey, Value, Clock}, infinity);
-
-handle(read_tx, [BKeys, Clock]) ->
-    gen_server:call({local, ?MODULE}, {read_tx, BKeys, Clock}, infinity);
-
-handle(write_tx, [Pairs, Clock]) ->
-    gen_server:call({local, ?MODULE}, {write_tx, Pairs, Clock}, infinity).
+data(Node, Label, BKey, Value) ->
+    gen_server:cast(Node, {data, Label, BKey, Value}).
 
 init([]) ->
-    lager:info("Client receiver started at ~p", [reg_name()]),
     {ok, nostate}.
 
-handle_call({read, BKey, Clock}, From, S0) ->
-    saturn_leaf:async_read(BKey, Clock, From),
-    {noreply, S0};
+handle_call(Info, From, State) ->
+    lager:error("Unhandled message ~p, from ~p", [Info, From]),
+    {reply, ok, State}.
 
-handle_call({read_tx, BKeys, Clock}, From, S0) ->
-    saturn_leaf:async_txread(BKeys, Clock, From),
+handle_cast({data, Label, BKey, Value}, S0) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:data(IndexNode, Label, BKey, Value),
     {noreply, S0};
-
-handle_call({write_tx, Pairs, Clock}, From, S0) ->
-    saturn_leaf:async_txwrite(Pairs, Clock, From),
-    {noreply, S0};
-
-handle_call({update, BKey, Value, Clock}, From, S0) ->
-    saturn_leaf:async_update(BKey, Value, Clock, From),
-    {noreply, S0}.
 
 handle_cast(_Info, State) ->
     {noreply, State}.
