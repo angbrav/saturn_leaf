@@ -677,9 +677,15 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
 
 handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
-    saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
-    riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
-    {noreply, S0#state{max_ts=Clock}};
+    case ((Clock - MaxTS0) > (?HEARTBEAT_FREQ*1000)) of
+        true ->
+            saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
+            riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
+            {noreply, S0#state{max_ts=Clock}};
+        false ->
+            riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
+            {noreply, S0}
+    end;
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
