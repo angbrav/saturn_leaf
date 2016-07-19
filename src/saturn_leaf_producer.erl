@@ -40,10 +40,11 @@
 
 -record(state, {vclock :: dict(),
                 delay,
-                stable_time,
                 manager,
+                stable_time,
                 pending,
                 labels :: list(),
+                latest_time,
                 myid}).
                 
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)).
@@ -80,14 +81,23 @@ init([MyId]) ->
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
     Labels = ets:new(labels_producer, [ordered_set, named_table, private]),
-    erlang:send_after(10, self(), deliver),
+    %erlang:send_after(10, self(), deliver),
     %{ok, Delay} = groups_manager_serv:get_delay_leaf(),
     Delay=0,
-    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager}}.
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager, latest_time=0}}.
 
 
-handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, pending=_Pending0, stable_time=_StableTime0, labels=_Labels, myid=_MyId}) ->
+handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, labels=Labels, myid=MyId, manager=Manager, latest_time=LatestTime}) ->
     VClock1 = dict:store(Partition, Clock, VClock0),
+    Now = saturn_utilities:now_microsec(),
+    case (Now - LatestTime > ?STABILIZATION_FREQ) of
+        true ->
+            StableTime1 = compute_stable(VClock1),
+            ok = deliver_labels_new(Labels, StableTime1, MyId, [], Manager),
+            {noreply, S0#state{vclock=VClock1, latest_time=Now}};
+        false ->
+            {noreply, S0#state{vclock=VClock1}}
+    end;
     %StableTime1 = compute_stable(VClock1),
     %case (Pending0==false) and (StableTime1 > StableTime0) of
         %true ->
@@ -96,9 +106,9 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0, p
         %false ->
             %{noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
     %end;
-    {noreply, S0#state{vclock=VClock1}};
+    %{noreply, S0#state{vclock=VClock1}};
 
-handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, stable_time=_StableTime0, myid=_MyId, pending=_Pending0, delay=_Delay}) ->
+handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, myid=MyId, manager=Manager, latest_time=LatestTime}) ->
     TimeStamp = Label#label.timestamp,
     Time=0,
     %case IsUpdate of
@@ -110,6 +120,15 @@ handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, v
     %end,
     ets:insert(Labels, {{TimeStamp, Time, Partition, Label}, in}),
     VClock1 = dict:store(Partition, TimeStamp, VClock0),
+    Now = saturn_utilities:now_microsec(),
+    case (Now - LatestTime > ?STABILIZATION_FREQ) of
+        true ->
+            StableTime1 = compute_stable(VClock1),
+            ok = deliver_labels_new(Labels, StableTime1, MyId, [], Manager),
+            {noreply, S0#state{vclock=VClock1, latest_time=Now}};
+        false ->
+            {noreply, S0#state{vclock=VClock1}}
+    end;
     %StableTime1 = compute_stable(VClock1),
     %case (Pending0==false) and (StableTime1 > StableTime0) of
     %    true ->
@@ -118,7 +137,7 @@ handle_cast({new_label, Label, Partition, _IsUpdate}, S0=#state{labels=Labels, v
     %    false ->
     %        {noreply, S0#state{vclock=VClock1, stable_time=StableTime1}}
     %end;
-    {noreply, S0#state{vclock=VClock1}};
+    %{noreply, S0#state{vclock=VClock1}};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
@@ -129,7 +148,7 @@ handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
     VClock1 = lists:foldl(fun({Partition, _}, Acc) ->
                             dict:store(Partition, 0, Acc)
                           end, dict:new(), dict:to_list(VClock0)),
-    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false}};
+    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false, latest_time=0}};
 
 handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0}) ->
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
