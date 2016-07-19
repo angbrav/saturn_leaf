@@ -26,7 +26,6 @@
                 busy :: dict(),
                 delays, %has to be in microsecs
                 manager,
-                staleness, 
                 myid}).
 
 %% ------------------------------------------------------------------
@@ -72,30 +71,15 @@ init([MyId]) ->
     Delays1 = lists:foldl(fun({Node, Delay}, Dict) ->
                             dict:store(Node, Delay*1000, Dict)
                           end, dict:new(), dict:to_list(Delays0)),
-    NameStaleness = list_to_atom(integer_to_list(MyId) ++ atom_to_list(internal_staleness)),
-    Staleness = ?STALENESS:init(NameStaleness),
-    {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager, staleness=Staleness}}.
+    {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager}}.
 
 
-handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager, staleness=Staleness}) ->
+handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager}) ->
     Paths = Manager#state_manager.paths,
     Groups = Manager#state_manager.groups,
     NLeaves = Manager#state_manager.nleaves,
-    {Q1, S1} = lists:foldl(fun(Label, {Acc0, Stale0}) ->
-                             Stale1 = case Label#label.operation of
-                                update ->
-                                    Clock = Label#label.timestamp,
-                                    %lager:info("Dif : ~p", [saturn_utilities:now_microsec() - Clock]),
-                                    Sender = Label#label.sender,
-                                    ?STALENESS:add_update(Stale0, Sender, Clock);
-                                remote_read ->
-                                    Clock = Label#label.timestamp,
-                                    Sender = Label#label.sender,
-                                    ?STALENESS:add_remote(Stale0, Sender, Clock);
-                                _ ->
-                                    Stale0
-                             end,
-                             A=lists:foldl(fun(Node, Acc1) ->
+    Queues1 = lists:foldl(fun(Label, Acc0) ->
+                            lists:foldl(fun(Node, Acc1) ->
                                             case Node of
                                                 IdSender ->
                                                     Acc1;
@@ -145,37 +129,31 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                                                             end
                                                     end
                                             end
-                                          end, Acc0, dict:fetch_keys(Queues0)),
-                            {A, Stale1} 
-                          end, {Queues0, Staleness}, Stream),
+                                          end, Acc0, dict:fetch_keys(Queues0))
+                          end, Queues0, Stream),
     {Queues2, Busy1} = lists:foldl(fun(Node, {Acc1, Acc2}) ->
                                     case dict:fetch(Node, Busy0) of
                                         false ->
-                                            {NewQueue, NewPending} = deliver_labels(dict:fetch(Node, Q1), Node, MyId, [], NLeaves),
+                                            {NewQueue, NewPending} = deliver_labels(dict:fetch(Node, Queues1), Node, MyId, [], NLeaves),
                                             {dict:store(Node, NewQueue, Acc1), dict:store(Node, NewPending, Acc2)};
                                         true ->
-                                            OldQueue = dict:fetch(Node, Q1),
+                                            OldQueue = dict:fetch(Node, Queues1),
                                             {dict:store(Node, OldQueue, Acc1), dict:store(Node, true, Acc2)}
                                     end
-                                   end, {dict:new(), dict:new()}, dict:fetch_keys(Q1)),
-    {noreply, S0#state{queues=Queues2, busy=Busy1, staleness=S1}};
+                                   end, {dict:new(), dict:new()}, dict:fetch_keys(Queues1)),
+    {noreply, S0#state{queues=Queues2, busy=Busy1}};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_call(restart, _From, S0=#state{busy=Busy0, queues=Queues0, staleness=Staleness, myid=MyId}) ->
+handle_call(restart, _From, S0=#state{busy=Busy0, queues=Queues0}) ->
     Queues1 = lists:foldl(fun({Node, Queue}, Acc) ->
                             dict:store(Node, ets_queue:clean(Queue), Acc)
                           end, dict:new(), dict:to_list(Queues0)),
     Busy1 = lists:foldl(fun({Node, _}, Acc) ->
                             dict:store(Node, false, Acc)
                         end, dict:new(), dict:to_list(Busy0)),
-    Name = list_to_atom(integer_to_list(MyId) ++ atom_to_list(internal_staleness)),
-    Staleness1 = ?STALENESS:clean(Staleness, Name),
-    {reply, ok, S0#state{queues=Queues1, busy=Busy1, staleness=Staleness1}};
-
-handle_call({collect_stats, From, Type}, _From, S0=#state{staleness=Staleness}) ->
-    {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
+    {reply, ok, S0#state{queues=Queues1, busy=Busy1}};
 
 handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=MyId, queues=Queues}) ->
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
