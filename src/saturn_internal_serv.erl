@@ -85,7 +85,7 @@ handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0
                              Stale1 = case Label#label.operation of
                                 update ->
                                     Clock = Label#label.timestamp,
-                                    lager:info("Dif : ~p", [saturn_utilities:now_microsec() - Clock]),
+                                    %lager:info("Dif : ~p", [saturn_utilities:now_microsec() - Clock]),
                                     Sender = Label#label.sender,
                                     ?STALENESS:add_update(Stale0, Sender, Clock);
                                 remote_read ->
