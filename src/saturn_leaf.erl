@@ -12,6 +12,7 @@
          async_update/4,
          clean/1,
          collect_stats/2,
+         collect_stats_arrival/3,
          spawn_wrapper/4
         ]).
 
@@ -79,6 +80,11 @@ collect_stats(From, Type) ->
                                     ?STALENESS:merge_raw(Acc, Stats)
                                 end, [], GrossPrefLists),
     FinalStats = ?STALENESS:compute_cdf_from_orddict(FinalStatsRaw),
+    {ok, FinalStats}.
+
+collect_stats_arrival(To, From, Type) ->
+    {ok, StatsRaw} = saturn_leaf_converger:collect_stats(To, From, Type),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(StatsRaw),
     {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
