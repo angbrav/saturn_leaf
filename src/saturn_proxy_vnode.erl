@@ -532,12 +532,12 @@ handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared
                                 true ->
                                     case ets:lookup(KeyPrepared, BKey) of
                                         [{BKey, Orddict0}] ->
-                                            Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
+                                            _Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                         [] ->
-                                            Orddict1 = []
+                                            noop
                                             %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                                     end,
-                                    true = ets:insert(KeyPrepared, {BKey, Orddict1}),
+                                    %true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                                     {false, Remote};
                                 false ->
                                     {Bool, [{BKey, Value}|Remote]};
@@ -811,12 +811,12 @@ do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx)
     Pairs = lists:foldl(fun({_TxId, {BKey, Value}}, Acc) ->
                             case ets:lookup(KeyPrepared, BKey) of
                                 [{BKey, Orddict0}] ->
-                                    Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
+                                    _Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                 [] ->
-                                    Orddict1 = []
+                                    noop
                                     %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                             end,
-                            true = ets:insert(KeyPrepared, {BKey, Orddict1}),
+                            %true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                             [{BKey, Value}|Acc]
                         end, [], List),
     true = ets:insert(PreparedTx, {TxId, {Pairs, TimeStamp}}),

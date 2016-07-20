@@ -99,7 +99,7 @@ collect_prepare({prepared, IndexNode}, S0=#state{total=Total, involved=Involved0
 collect_prepare(timeout, S0=#state{vnode=VNode, myid=MyId, clock=Clock}) ->
     lager:error("Timeout when expecting prepare", []),
     saturn_leaf_converger:handle(MyId, {completed, Clock}),
-    saturn_proxy_vnode:remote__fsm_idle(VNode, self()),
+    saturn_proxy_vnode:remote_fsm_idle(VNode, self()),
     {next_state, idle, S0}.
 
 reply_client(timeout, S0=#state{clock=Clock, vnode=VNode, myid=MyId}) ->
