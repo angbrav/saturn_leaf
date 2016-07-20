@@ -455,8 +455,9 @@ handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0=#state{myid=MyId,
                 [] ->
                     {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
                     gen_fsm:send_event(Fsm, {new_value, BKey, Value});
-                [{BKey, Orddict}] ->
-                    case compute_wait_txs(Orddict, Clock, 0, []) of
+                [{BKey, _Orddict}] ->
+                    %case compute_wait_txs(Orddict, Clock, 0, []) of
+                    case compute_wait_txs([], Clock, 0, []) of
                         {0, []} ->
                             {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
                             gen_fsm:send_event(Fsm, {new_value, BKey, Value});
