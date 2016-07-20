@@ -800,7 +800,7 @@ compute_wait_txs([Next|Rest], Version, Length, WaitList) ->
         false ->
             {WaitList1, Sum} = lists:foldl(fun({TxId, _Value}, {Acc0, Acc1}) ->
                                             {[TxId|Acc0], Acc1+1} 
-                                    end, WaitList, Txs),
+                                    end, {WaitList, 0}, Txs),
             compute_wait_txs(Rest, Version, Length+Sum, WaitList1)
     end.
 
