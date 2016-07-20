@@ -454,22 +454,23 @@ handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0=#state{myid=MyId,
             case ets:lookup(KeyPrepared, BKey) of
                 [] ->
                     {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
-                    gen_fsm:send_event(Fsm, {new_value, BKey, Value});
+                    gen_fsm:send_event(Fsm, {new_value, BKey, Value}),
+                    {noreply, S0};
                 [{BKey, Orddict}] ->
                     case compute_wait_txs(Orddict, Clock, 0, []) of
-                    %case compute_wait_txs([], Clock, 0, []) of
                         {0, []} ->
                             {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
-                            gen_fsm:send_event(Fsm, {new_value, BKey, Value});
+                            gen_fsm:send_event(Fsm, {new_value, BKey, Value}),
+                            {noreply, S0};
                         {Length, List} ->
                             ReadId1 = ReadId0 + 1,
                             true = ets:insert(PendingCounter, {ReadId1, {Length, BKey, Clock, Fsm}}),
                             lists:foreach(fun(TxId) ->
                                             true = ets:insert(PendingReads, {TxId, ReadId1})
-                                          end, List)
+                                          end, List),
+                            {noreply, S0#state{read_id=ReadId1}}
                     end
-            end,
-            {noreply, S0};
+            end;
         {ok, Id} ->
             %Remote read
             PhysicalClock = saturn_utilities:now_microsec(),
@@ -797,10 +798,10 @@ compute_wait_txs([Next|Rest], Version, Length, WaitList) ->
         true ->
             {Length, WaitList};
         false ->
-            WaitList1 = lists:foldl(fun({TxId, _Value}, Acc) ->
-                                        [TxId|Acc]
+            {WaitList1, Sum} = lists:foldl(fun({TxId, _Value}, {Acc0, Acc1}) ->
+                                            {[TxId|Acc0], Acc1+1} 
                                     end, WaitList, Txs),
-            compute_wait_txs(Rest, Version, Length+1, WaitList1)
+            compute_wait_txs(Rest, Version, Length+Sum, WaitList1)
     end.
 
 do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx) ->
