@@ -76,7 +76,7 @@ idle(_, S0) ->
 
 collect_prepare({error, Reason}, S0=#state{client=Client, vnode=VNode}) ->
     gen_server:reply(Client, {error, Reason}),
-    saturn_proxy_vnode:write_fsm_idle(VNode, self()),
+    saturn_proxy_vnode:writefsm_idle(VNode, self()),
     {next_state, idle, S0};
     
 collect_prepare(prepared, S0=#state{total=Total}) ->
@@ -89,12 +89,12 @@ collect_prepare(prepared, S0=#state{total=Total}) ->
 
 collect_prepare(timeout, S0=#state{client=Client, vnode=VNode}) ->
     gen_server:reply(Client, {error, timeout}),
-    saturn_proxy_vnode:write_fsm_idle(VNode, self()),
+    saturn_proxy_vnode:writefsm_idle(VNode, self()),
     {next_state, idle, S0}.
 
 reply_client(timeout, S0=#state{client=Client, vnode=VNode}) ->
     gen_server:reply(Client, {ok, 0}),
-    saturn_proxy_vnode:write_fsm_idle(VNode, self()),
+    saturn_proxy_vnode:writefsm_idle(VNode, self()),
     {next_state, idle, S0}.
 
 handle_info(_Info, _StateName, StateData) ->
