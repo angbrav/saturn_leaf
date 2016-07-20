@@ -623,7 +623,7 @@ handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
             lists:foreach(fun({_, Pending}) ->
                             case ets:lookup(PendingCounter, Pending) of
                                 [{Pending, {1, BKey, Version, Fsm}}] ->
-                                    {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector1, {BKey, Version, Fsm}),
+                                    {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector1, {BKey, Version}),
                                     gen_fsm:send_event(Fsm, {new_value, BKey, Value}),
                                     true = ets:delete(PendingCounter, Pending);
                                 [{Pending, {Counter, BKey, Version, Fsm}}] ->
