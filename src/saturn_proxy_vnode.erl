@@ -534,7 +534,8 @@ handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared
                                         [{BKey, Orddict0}] ->
                                             Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                         [] ->
-                                            Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
+                                            Orddict1 = []
+                                            %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                                     end,
                                     true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                                     {false, Remote};
@@ -612,14 +613,16 @@ handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
                                     true ->
                                         noop
                                 end,
-                                [{BKey, Orddict0}] = ets:lookup(KeyPrepared, BKey),
-                                true = ets:insert(KeyPrepared, {BKey, clean_key_prepared(Orddict0, TimeStamp, TxId, [])}),
+                                %[{BKey, Orddict0}] = ets:lookup(KeyPrepared, BKey),
+                                %true = ets:insert(KeyPrepared, {BKey, clean_key_prepared(Orddict0, TimeStamp, TxId, [])}),
+                                true = ets:insert(KeyPrepared, {BKey, clean_key_prepared([], TimeStamp, TxId, [])}),
                                 Acc1
                             end, Connector0, Pairs),
     case ets:lookup(PendingReads, TxId) of
         [] ->
             noop;
         Pendings ->
+            lager:info("Never here"),
             lists:foreach(fun({_, Pending}) ->
                             case ets:lookup(PendingCounter, Pending) of
                                 [{Pending, {1, BKey, Version, Fsm}}] ->
@@ -810,7 +813,8 @@ do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx)
                                 [{BKey, Orddict0}] ->
                                     Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                 [] ->
-                                    Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
+                                    Orddict1 = []
+                                    %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                             end,
                             true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                             [{BKey, Value}|Acc]
