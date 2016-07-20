@@ -462,6 +462,7 @@ handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0=#state{myid=MyId,
                             {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
                             gen_fsm:send_event(Fsm, {new_value, BKey, Value});
                         {Length, List} ->
+                            lager:info("Never here"),
                             ReadId1 = ReadId0 + 1,
                             true = ets:insert(PendingCounter, {ReadId1, {Length, BKey, Clock, Fsm}}),
                             lists:foreach(fun(TxId) ->
@@ -532,12 +533,11 @@ handle_command({prepare, TxId, Pairs, TimeStamp, Fsm}, _From, S0=#state{prepared
                                 true ->
                                     case ets:lookup(KeyPrepared, BKey) of
                                         [{BKey, Orddict0}] ->
-                                            _Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
+                                            Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                         [] ->
-                                            noop
-                                            %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
+                                            Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                                     end,
-                                    %true = ets:insert(KeyPrepared, {BKey, Orddict1}),
+                                    true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                                     {false, Remote};
                                 false ->
                                     {Bool, [{BKey, Value}|Remote]};
@@ -613,9 +613,8 @@ handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
                                     true ->
                                         noop
                                 end,
-                                %[{BKey, Orddict0}] = ets:lookup(KeyPrepared, BKey),
-                                %true = ets:insert(KeyPrepared, {BKey, clean_key_prepared(Orddict0, TimeStamp, TxId, [])}),
-                                true = ets:insert(KeyPrepared, {BKey, clean_key_prepared([], TimeStamp, TxId, [])}),
+                                [{BKey, Orddict0}] = ets:lookup(KeyPrepared, BKey),
+                                true = ets:insert(KeyPrepared, {BKey, clean_key_prepared(Orddict0, TimeStamp, TxId, [])}),
                                 Acc1
                             end, Connector0, Pairs),
     case ets:lookup(PendingReads, TxId) of
@@ -811,12 +810,11 @@ do_remote_prepare(TxId, TimeStamp, List, Data, Remote0, KeyPrepared, PreparedTx)
     Pairs = lists:foldl(fun({_TxId, {BKey, Value}}, Acc) ->
                             case ets:lookup(KeyPrepared, BKey) of
                                 [{BKey, Orddict0}] ->
-                                    _Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
+                                    Orddict1 = orddict:append(TimeStamp, {TxId, Value}, Orddict0);
                                 [] ->
-                                    noop
-                                    %Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
+                                    Orddict1 = orddict:append(TimeStamp, {TxId, Value}, orddict:new())
                             end,
-                            %true = ets:insert(KeyPrepared, {BKey, Orddict1}),
+                            true = ets:insert(KeyPrepared, {BKey, Orddict1}),
                             [{BKey, Value}|Acc]
                         end, [], List),
     true = ets:insert(PreparedTx, {TxId, {Pairs, TimeStamp}}),
