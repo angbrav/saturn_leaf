@@ -455,14 +455,13 @@ handle_command({fsm_read, BKey, Clock, Fsm}, _From, S0=#state{myid=MyId,
                 [] ->
                     {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
                     gen_fsm:send_event(Fsm, {new_value, BKey, Value});
-                [{BKey, _Orddict}] ->
-                    %case compute_wait_txs(Orddict, Clock, 0, []) of
-                    case compute_wait_txs([], Clock, 0, []) of
+                [{BKey, Orddict}] ->
+                    case compute_wait_txs(Orddict, Clock, 0, []) of
+                    %case compute_wait_txs([], Clock, 0, []) of
                         {0, []} ->
                             {ok, {Value, _}} = ?BACKEND_CONNECTOR:read(Connector, {BKey, Clock}),
                             gen_fsm:send_event(Fsm, {new_value, BKey, Value});
                         {Length, List} ->
-                            lager:info("Never here"),
                             ReadId1 = ReadId0 + 1,
                             true = ets:insert(PendingCounter, {ReadId1, {Length, BKey, Clock, Fsm}}),
                             lists:foreach(fun(TxId) ->
@@ -621,7 +620,6 @@ handle_command({commit, TxId, Remote}, _From, S0=#state{prepared_tx=PreparedTx,
         [] ->
             noop;
         Pendings ->
-            lager:info("Never here"),
             lists:foreach(fun({_, Pending}) ->
                             case ets:lookup(PendingCounter, Pending) of
                                 [{Pending, {1, BKey, Version, Fsm}}] ->
@@ -794,14 +792,14 @@ compute_wait_txs([], _Version, Length, WaitList) ->
     {Length, WaitList};
 
 compute_wait_txs([Next|Rest], Version, Length, WaitList) ->
-    {TimeStamp, TxIds} = Next,
+    {TimeStamp, Txs} = Next,
     case TimeStamp > Version of
         true ->
             {Length, WaitList};
         false ->
-            WaitList1 = lists:foldl(fun(TxId, Acc) ->
+            WaitList1 = lists:foldl(fun({TxId, _Value}, Acc) ->
                                         [TxId|Acc]
-                                    end, WaitList, TxIds),
+                                    end, WaitList, Txs),
             compute_wait_txs(Rest, Version, Length+1, WaitList1)
     end.
 
