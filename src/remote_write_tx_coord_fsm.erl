@@ -64,6 +64,7 @@ init([VNode, MyId]) ->
 
 idle({new_tx, Node, BKeys, Clock}, S0) ->
     TxId = {Clock, Node},
+    lager:info("Remote tx about to start. BKeys: ~p, Node: ~p and Clock: ~p"),
     Scattered = lists:foldl(fun(BKey, Acc) ->
                                 DocIdx = riak_core_util:chash_key(BKey),
                                 PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
