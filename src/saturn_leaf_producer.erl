@@ -143,7 +143,7 @@ handle_call(Info, From, State) ->
 handle_info(deliver, S0=#state{myid=MyId, labels=Labels, vclock=VClock0, manager=Manager}) ->
     StableTime1 = compute_stable(VClock0),
     ok = deliver_labels(Labels, StableTime1, MyId, [], Manager),
-    erlang:send_after(1, self(), deliver),
+    erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
     {noreply, S0};
 
 handle_info(Info, State) ->

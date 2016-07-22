@@ -34,6 +34,12 @@ confirm() ->
     rt:update_app_config(all,[
         {riak_core, [{ring_creation_size, NumVNodes}]}
     ]),
+    rt:update_app_config(all,[
+        {saturn_leaf, [{groups, "data/manager/groups.saturn"}]}
+    ]),
+    rt:update_app_config(all,[
+        {saturn_leaf, [{tree, "data/manager/tree.saturn"}]}
+    ]),
     _Clusters = [Cluster1, Cluster2, Cluster3, Cluster4, Cluster5] = rt:build_clusters([1, 1, 1, 1, 1]),
 
 

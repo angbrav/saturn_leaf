@@ -43,6 +43,12 @@ confirm() ->
     rt:update_app_config(all,[
         {saturn_leaf, [{riak_port, 8001}]}
     ]),
+    rt:update_app_config(all,[
+        {saturn_leaf, [{groups, "data/manager/groups.saturn"}]}
+    ]),
+    rt:update_app_config(all,[
+        {saturn_leaf, [{tree, "data/manager/tree.saturn"}]}
+    ]),
     N = 2,
     [Cluster1, Cluster2, Cluster3] = rt:build_clusters([N, 1, 2]),
 
