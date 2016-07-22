@@ -40,9 +40,7 @@
 
 -record(state, {vclock :: dict(),
                 delay,
-                stable_time,
                 manager,
-                pending,
                 labels :: list(),
                 myid}).
                 
@@ -81,9 +79,9 @@ init([MyId]) ->
                        end, dict:new(), GrossPrefLists),
     Labels = ets:new(labels_producer, [ordered_set, named_table, private]),
     erlang:send_after(10, self(), deliver),
-    {ok, Delay} = groups_manager_serv:get_delay_leaf(),
+    {ok, Delay} = groups_manager:get_delay_leaf(Manager#state_manager.tree, MyId, Manager#state_manager.nleaves),
     %Delay=0,
-    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, stable_time=0, pending=false, manager=Manager}}.
+    {ok, #state{labels=Labels, myid=MyId, vclock=Dict, delay=Delay*1000, manager=Manager}}.
 
 
 handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0}) ->
@@ -112,9 +110,9 @@ handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
     VClock1 = lists:foldl(fun({Partition, _}, Acc) ->
                             dict:store(Partition, 0, Acc)
                           end, dict:new(), dict:to_list(VClock0)),
-    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, stable_time=0, pending=false}};
+    {reply, ok, S0#state{labels=Labels1, vclock=VClock1}};
 
-handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0}) ->
+handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=MyId}) ->
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
@@ -122,7 +120,8 @@ handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0}) ->
                     ok = saturn_proxy_vnode:set_tree(hd(PrefList), Paths, Tree, Leaves)
                   end, GrossPrefLists),
     Manager1 = Manager0#state_manager{paths=Paths, tree=Tree, nleaves=Leaves},
-    {reply, ok, S0#state{manager=Manager1}};
+    {ok, Delay} = groups_manager:get_delay_leaf(Manager1#state_manager.tree, MyId, Manager1#state_manager.nleaves),
+    {reply, ok, S0#state{manager=Manager1, delay=Delay}};
 
 handle_call({set_groups, RGroups}, _From, S0=#state{manager=Manager}) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
