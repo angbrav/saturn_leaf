@@ -222,10 +222,17 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     gen_server:reply(Client, {ok, TimeStamp}),
     {noreply, S1};
 
-handle_command({propagate, BKey, Value, _TimeStamp}, _From, S0=#state{connector=Connector0, myid=MyId}) ->
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
-    saturn_leaf_converger:handle(MyId, completed),
-    {noreply, S0#state{connector=Connector1}};
+handle_command({propagate, BKey, Value, TimeStamp}, _From, S0=#state{connector=Connector0, myid=MyId}) ->
+    {ok, {_, Clock}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    case (Clock<TimeStamp) of
+        true ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+            saturn_leaf_converger:handle(MyId, completed),
+            {noreply, S0#state{connector=Connector1}};
+        false ->
+            saturn_leaf_converger:handle(MyId, completed),
+            {noreply, S0}
+    end;
     
 handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector}) ->
     BKeyToRead = Label#label.bkey,
