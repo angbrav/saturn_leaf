@@ -26,7 +26,7 @@
 -define(MYIDKEY, myid_key).
 
 -define(HEARTBEAT_FREQ, 1). %millisec
--define(STABILIZATION_FREQ, 0). %microsec
+-define(STABILIZATION_FREQ, 1). %microsec
 
 %-define(PROPAGATION_MODE, naive_erlang).
 -define(PROPAGATION_MODE, bypass_tree).
