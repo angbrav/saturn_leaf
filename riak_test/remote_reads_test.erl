@@ -86,6 +86,10 @@ confirm() ->
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
     ok=rpc:call(Leaf3, saturn_leaf_producer, check_ready, [2]),
 
+    ok=rpc:call(Leaf1, saturn_leaf_receiver, assign_convergers, [0, 3]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 3]),
+    ok=rpc:call(Leaf3, saturn_leaf_receiver, assign_convergers, [2, 3]),
+
     Tree0 = dict:store(0, [-1,1,2,3,-1], dict:new()),
     Tree1 = dict:store(1, [4,-1,5,6,-1], Tree0),
     Tree2 = dict:store(2, [7,8,-1,-1,9], Tree1),

@@ -9,7 +9,7 @@
          async_read/3,
          async_update/4,
          clean/1,
-         collect_stats/3,
+         collect_stats/2,
          spawn_wrapper/4
         ]).
 
@@ -56,8 +56,15 @@ clean(MyId) ->
                   end, GrossPrefLists),
     ok.
 
-collect_stats(MyId, Sender, Type) ->
-    saturn_leaf_converger:dump_stats(MyId, Sender, Type).
+collect_stats(From, Type) ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
+                                    {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList), From, Type),
+                                    ?STALENESS:merge_raw(Acc, Stats)
+                                end, [], GrossPrefLists),
+    FinalStats = ?STALENESS:compute_cdf_from_orddict(FinalStatsRaw),
+    {ok, FinalStats}.
 
 spawn_wrapper(Module, Function, Pid, Args) ->
     Result = apply(Module, Function, Args),

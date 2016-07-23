@@ -76,6 +76,9 @@ confirm() ->
     ok=rpc:call(Node1, saturn_leaf_producer, check_ready, [0]),
     ok=rpc:call(Leaf2, saturn_leaf_producer, check_ready, [1]),
 
+    ok=rpc:call(Node1, saturn_leaf_receiver, assign_convergers, [0, 2]),
+    ok=rpc:call(Leaf2, saturn_leaf_receiver, assign_convergers, [1, 2]),
+
     {ok, _HostPort}=rpc:call(Internal1, saturn_leaf_sup, start_internal, [4040, 2]),
 
     Tree0 = dict:store(0, [-1, 300, 50], dict:new()),

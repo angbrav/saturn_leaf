@@ -45,6 +45,9 @@ start_leaf(Port, MyId) ->
     Host = inet_parse:ntoa(Ip),
 
     %riak_core_metadata:put(?MYIDPREFIX, ?MYIDKEY, MyId),
+    supervisor:start_child(?MODULE, {saturn_leaf_receiver,
+                    {saturn_leaf_receiver, start_link, [MyId]},
+                    permanent, 5000, worker, [saturn_leaf_receiver]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
                     {saturn_leaf_converger, start_link, [MyId]},
@@ -79,7 +82,10 @@ init(_Args) ->
     ClientReceiver = {saturn_client_receiver,
                      {saturn_client_receiver, start_link, []},
                      permanent, 5000, worker, [saturn_client_receiver]},
-    Childs0 = [ProxyMaster, ClientReceiver],
+    DataReceiver = {saturn_data_receiver,
+                     {saturn_data_receiver, start_link, []},
+                     permanent, 5000, worker, [saturn_data_receiver]},
+    Childs0 = [ProxyMaster, ClientReceiver, DataReceiver],
     Childs1 = case ?BACKEND of
                 simple_backend ->
                     BackendMaster = {?SIMPLE_MASTER,
