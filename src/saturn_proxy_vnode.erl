@@ -55,7 +55,7 @@
          set_groups/2,
          clean_state/1,
          set_receivers/2,
-         data/4,
+         data/2,
          collect_stats/3,
          check_ready/1]).
 
@@ -143,9 +143,9 @@ remote_read(Node, Label) ->
                                    {fsm, undefines, self()},
                                    ?PROXY_MASTER).
 
-data(Node, TxId, BKey, Value) ->
+data(Node, ListOps) ->
     riak_core_vnode_master:command(Node,
-                                   {data, TxId, BKey, Value},
+                                   {data, ListOps},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -231,21 +231,13 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     ok = groups_manager:set_groups(Table, Groups),
     {reply, ok, S0};
 
-handle_command({data, Id, BKey, Value}, _From, S0=#state{data=Data,
-                                                         pending=Pending,
-                                                         connector=Connector0,
-                                                         myid=MyId,
-                                                         staleness=Staleness0}) ->
-
-    case Pending of
-        {Id, Sender} ->
-            {TimeStamp, _} = Id,
-            {Connector1, Staleness1} = do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0),
-            {noreply, S0#state{connector=Connector1, staleness=Staleness1, pending=none}};
-        _ ->
-            true = ets:insert(Data, {Id, {BKey, Value}}),
-            {noreply, S0}
-    end;
+handle_command({data, ListOps}, _From, S0=#state{data=Data,
+                                                 pending=Pending,
+                                                 connector=Connector0,
+                                                 myid=MyId,
+                                                 staleness=Staleness0}) ->
+    {Connector1, Staleness1, Pending1} = handle_data_batch(ListOps, Pending, Data, Staleness0, Connector0, MyId),
+    {noreply, S0#state{connector=Connector1, staleness=Staleness1, pending=Pending1}};
 
 handle_command({read, BKey, Clock}, From, S0) ->
     case do_read(sync, BKey, Clock, From, S0) of
@@ -420,4 +412,22 @@ do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0) -
         false ->
             saturn_leaf_converger:handle(MyId, completed),
             {Connector0, Staleness1}
+    end.
+
+handle_data_batch([], Pending, _Data, Staleness0, Connector0, _MyId) ->
+    {Connector0, Staleness0, Pending};
+
+handle_data_batch([Next|Rest], Pending, Data, Staleness0, Connector0, MyId) ->
+    {Id, BKey, Value} = Next,
+    case Pending of
+        {Id, Sender} ->
+            {TimeStamp, _} = Id,
+            {Connector1, Staleness1} = do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0),
+            lists:foreach(fun({IdR, BKeyR, ValueR}) ->
+                            true = ets:insert(Data, {IdR, {BKeyR, ValueR}})
+                          end, Rest),
+            {Connector1, Staleness1, none};
+        _ ->
+            true = ets:insert(Data, {Id, {BKey, Value}}),
+            handle_data_batch(Rest, Pending, Data, Staleness0, Connector0, MyId)
     end.

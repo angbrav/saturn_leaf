@@ -37,25 +37,33 @@
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
-data(Node, Label, BKey, Value) ->
-    gen_server:cast(Node, {data, Label, BKey, Value}).
+data(Node, Id, BKey, Value) ->
+    gen_server:cast(Node, {data, Id, BKey, Value}).
 
 init([]) ->
-    {ok, nostate}.
+    erlang:send_after(10, self(), deliver),
+    {ok, dict:new()}.
 
 handle_call(Info, From, State) ->
     lager:error("Unhandled message ~p, from ~p", [Info, From]),
     {reply, ok, State}.
 
-handle_cast({data, Label, BKey, Value}, S0) ->
+handle_cast({data, Id, BKey, Value}, Dict) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:data(IndexNode, Label, BKey, Value),
-    {noreply, S0};
+    Dict1 = dict:append(IndexNode, {Id, BKey, Value}, Dict),
+    {noreply, Dict1};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
+
+handle_info(deliver, Dict) ->
+    lists:foreach(fun({IndexNode, Data}) ->
+                    saturn_proxy_vnode:data(IndexNode, Data)
+                  end, dict:to_list(Dict)),
+    erlang:send_after(?DATA_DELIVERY_FREQ, self(), deliver),
+    {noreply, dict:new()};
 
 handle_info(_Info, State) ->
     {noreply, State}.
