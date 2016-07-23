@@ -68,6 +68,7 @@
                 receivers,
                 pending,
                 staleness,
+                list_pending,
                 myid}).
 
 %% API
@@ -174,6 +175,7 @@ init([Partition]) ->
                 data=Data,
                 pending=none,
                 staleness=Staleness,
+                list_pending=[],
                 manager=Manager}}.
 
 %% @doc The table holding the prepared transactions is shared with concurrent
@@ -214,6 +216,7 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=P
     {reply, ok, S0#state{max_ts=0,
                          last_label=none,
                          pending=none,
+                         list_pending=[],
                          staleness=Staleness1,
                          connector=Connector1}};
 
@@ -295,17 +298,33 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel, staleness=Staleness1}};
 
-handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId}) ->
+handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, myid=MyId, list_pending=ListPending, manager=Manager, receivers=Receivers}) ->
     Clock = max(saturn_utilities:now_microsec(), MaxTS0+1),
-    case ((Clock - MaxTS0) > (?HEARTBEAT_FREQ*1000)) of
+    MaxTS1 = case ((Clock - MaxTS0) > (?HEARTBEAT_FREQ*1000)) of
         true ->
             saturn_leaf_producer:partition_heartbeat(MyId, Partition, Clock),
             riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
-            {noreply, S0#state{max_ts=Clock}};
+            Clock;
         false ->
             riak_core_vnode:send_command_after(?HEARTBEAT_FREQ, heartbeat),
-            {noreply, S0}
-    end;
+            MaxTS0
+    end,
+    Dict = lists:foldl(fun({_UId, BKey, _Value}=Elem, AccOut) ->
+                        case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
+                            {ok, Group} ->
+                                lists:foldl(fun(Id, AccIn) ->
+                                                dict:append(Id, Elem, AccIn)
+                                             end, AccOut, Group);
+                            {error, Reason2} ->
+                                lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2]),
+                                AccOut
+                        end
+                       end, dict:new(), ListPending),
+    lists:foreach(fun({Id, Data}) ->
+                    Receiver = dict:fetch(Id, Receivers),
+                    saturn_data_receiver:data(Receiver, Data)
+                  end, dict:to_list(Dict)),
+    {noreply, S0#state{max_ts=MaxTS1, list_pending=[]}};
 
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
@@ -374,7 +393,7 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=P
             {error, Reason}
     end.
     
-do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0, manager=Manager, receivers=Receivers}) ->
+do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0, manager=Manager, list_pending=ListPending0}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
     TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
     S1 = case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
@@ -389,17 +408,9 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
     end,
     Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
     saturn_leaf_producer:new_label(MyId, Label, Partition, true),
-    case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
-        {ok, Group} ->
-            lists:foreach(fun(Id) ->
-                            Receiver = dict:fetch(Id, Receivers),
-                            UId = {TimeStamp, {Partition, node()}},
-                            saturn_data_receiver:data(Receiver, UId, BKey, Value)
-                          end, Group);
-        {error, Reason2} ->
-            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-    end,
-    {{ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}}.
+    UId = {TimeStamp, {Partition, node()}},
+    ListPending1 = [{UId, BKey, Value}|ListPending0],
+    {{ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label, list_pending=ListPending1}}.
 
 do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0) ->
     Staleness1 = ?STALENESS:add_update(Staleness0, Sender, TimeStamp),

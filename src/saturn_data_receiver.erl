@@ -31,16 +31,17 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([data/4]).
+-export([data/2]).
 
                
 start_link() ->
     gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
-data(Node, Id, BKey, Value) ->
-    gen_server:cast(Node, {data, Id, BKey, Value}).
+data(Node, Data) ->
+    gen_server:cast(Node, {data, Data}).
 
 init([]) ->
+    lager:info("Data receiver started at ~p with pid ~p", [node(), self()]),
     erlang:send_after(10, self(), deliver),
     {ok, dict:new()}.
 
@@ -48,11 +49,13 @@ handle_call(Info, From, State) ->
     lager:error("Unhandled message ~p, from ~p", [Info, From]),
     {reply, ok, State}.
 
-handle_cast({data, Id, BKey, Value}, Dict) ->
-    DocIdx = riak_core_util:chash_key(BKey),
-    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-    [{IndexNode, _Type}] = PrefList,
-    Dict1 = dict:append(IndexNode, {Id, BKey, Value}, Dict),
+handle_cast({data, Data}, Dict) ->
+    Dict1 = lists:foldl(fun({Id, BKey, Value}, Acc) ->
+                            DocIdx = riak_core_util:chash_key(BKey),
+                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+                            [{IndexNode, _Type}] = PrefList,
+                            dict:append(IndexNode, {Id, BKey, Value}, Acc)
+                        end, Dict, Data),
     {noreply, Dict1};
 
 handle_cast(_Info, State) ->
