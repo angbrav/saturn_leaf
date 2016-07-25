@@ -10,6 +10,7 @@
          read/2,
          clean/0,
          collect_stats/2,
+         init_store/2,
          spawn_wrapper/4
         ]).
 
@@ -58,6 +59,16 @@ clean() ->
                   end, GrossPrefLists),
     ok.
 
+init_store(Buckets, NKeys) ->
+    lists:foreach(fun(Bucket) ->
+                    lists:foreach(fun(Key) ->
+                                    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+                                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+                                    [{IndexNode, _Type}] = PrefList,
+                                    saturn_proxy_vnode:init_update(IndexNode, {Bucket, Key})
+                                  end, lists:seq(1, NKeys))
+                 end, Buckets).
+    
 collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),

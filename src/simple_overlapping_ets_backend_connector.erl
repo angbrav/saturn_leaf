@@ -26,6 +26,7 @@
 -export([update/2,
          read/2,
          remote_read/2,
+         init_update/2,
          connect/1,
          clean/2
         ]).
@@ -49,6 +50,11 @@ update(ETS, Payload) ->
                     true = ets:insert(ETS, {BKey, {Length+1,List1}})
             end
     end,
+    {ok, ETS}.
+
+init_update(ETS, Payload) ->
+    BKey = Payload,
+    true =  ets:insert(ETS, {BKey, {1, [{{0, init}, bottom}]}}),
     {ok, ETS}.
 
 read(ETS, Payload)->
