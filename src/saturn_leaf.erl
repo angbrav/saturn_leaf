@@ -65,9 +65,10 @@ init_store(Buckets, NKeys) ->
                                     DocIdx = riak_core_util:chash_key({Bucket, Key}),
                                     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
                                     [{IndexNode, _Type}] = PrefList,
-                                    saturn_proxy_vnode:init_update(IndexNode, {Bucket, Key})
+                                    ok = saturn_proxy_vnode:init_update(IndexNode, {Bucket, Key})
                                   end, lists:seq(1, NKeys))
-                 end, Buckets).
+                  end, Buckets),
+    ok.
     
 collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
