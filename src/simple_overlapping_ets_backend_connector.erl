@@ -36,12 +36,12 @@ update(ETS, Payload) ->
     case ets:lookup(ETS, BKey) of
         [] ->
             true =  ets:insert(ETS, {BKey, {1, [{{TimeStamp, Origin}, Value}]}});
-        [{BKey, {Length,[{TSMax, _}|_Rest]=List}}] ->
+        [{BKey, {Length,[{TSMax, _}=First|Rest]=List}}] ->
             case (TSMax<{TimeStamp, Origin}) of
                 true ->
                     List1 = [{{TimeStamp, Origin}, Value}|List];
                 false ->
-                    List1 = orddict:store({TimeStamp, Origin}, Value, List)
+                    List1 = find_position(Rest, {TimeStamp, Origin}, Value, [First])
             end,
             case Length of
                 ?VERSION_THOLD ->
@@ -127,3 +127,19 @@ clean(ETS, Partition) ->
     Name = integer_to_list(Partition) ++ "kv",
     ets:new(list_to_atom(Name), [set, named_table, private]),
     ETS.
+
+find_position([], Version, Value, Head) ->
+    List = [{Version,Value}|Head],
+    lists:reverse(List);
+
+find_position([Next|Rest]=List, Version, Value, Head) ->
+    {TS, _} = Next,
+    case (Version > TS) of
+        true ->
+            List1 = [{Version, Value}|List],
+            lists:foldl(fun(Elem, Acc) ->
+                            [Elem|Acc]
+                        end, List1, Head);
+        false ->
+            find_position(Rest, Version, Value, [Next|Head])
+    end.
