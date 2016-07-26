@@ -439,7 +439,7 @@ do_read(Type, BKey, From, _S0=#state{connector=Connector, myid=MyId, partition=P
             {error, Reason}
     end.
 
-do_update(BKey, Value, S0=#state{partition=_Partition, myid=MyId, connector=Connector0, receivers=_Receivers, manager=Manager}) -> 
+do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Connector0, receivers=Receivers, manager=Manager}) -> 
     S1 = case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
@@ -450,14 +450,14 @@ do_update(BKey, Value, S0=#state{partition=_Partition, myid=MyId, connector=Conn
             lager:error("BKey ~p ~p is not in the dictionary",  [BKey, Reason1]),
             S0
     end,
-    %Label = create_label(update, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, {}),
-    %case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
-    %    {ok, Group} ->
-    %        lists:foreach(fun(Id) ->
-    %                        Receiver = dict:fetch(Id, Receivers),
-    %                        saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
-    %                      end, Group);
-    %    {error, Reason2} ->
-    %        lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
-    %end,
+    Label = create_label(update, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, {}),
+    case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
+        {ok, Group} ->
+            lists:foreach(fun(Id) ->
+                            Receiver = dict:fetch(Id, Receivers),
+                            saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
+                          end, Group);
+        {error, Reason2} ->
+            lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
+    end,
     {{ok, 0}, S1}.
