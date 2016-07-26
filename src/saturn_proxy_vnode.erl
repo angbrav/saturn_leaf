@@ -60,6 +60,7 @@
          clean_state/1,
          collect_stats/3,
          is_stable/2,
+         init_update/2,
          check_ready/1]).
 
 -record(state, {partition,
@@ -93,6 +94,11 @@ async_read(Node, BKey, Clock, Client) ->
                                    {async_read, BKey, Clock, Client},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
+
+init_update(Node, BKey) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {init_update, BKey},
+                                        ?PROXY_MASTER).
 
 update(Node, BKey, Value, Clock) ->
     riak_core_vnode_master:sync_command(Node,
@@ -237,6 +243,10 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
     ok = groups_manager:set_groups(Table, Groups),
     {reply, ok, S0};
+
+handle_command({init_update, BKey}, _From, S0=#state{connector=Connector0}) ->
+    {ok, Connector1} = ?BACKEND_CONNECTOR:init_update(Connector0, BKey),
+    {reply, ok, S0#state{connector=Connector1}};
 
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
