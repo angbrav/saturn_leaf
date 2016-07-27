@@ -166,7 +166,7 @@ init([Partition]) ->
     Data = ets:new(Name1, [bag, named_table, private]),
     NameStaleness = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
     Staleness = ?STALENESS:init(NameStaleness),
-    lager:info("Vnode init"),
+    lager:info("Vnode init ~p", [self()]),
     {ok, #state{partition=Partition,
                 max_ts=0,
                 last_label=none,
