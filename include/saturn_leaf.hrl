@@ -25,7 +25,7 @@
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
 
--define(HEARTBEAT_FREQ, 1).
+-define(HEARTBEAT_FREQ, 2).
 -define(STABILIZATION_FREQ, 1).
 
 %-define(PROPAGATION_MODE, naive_erlang).
