@@ -411,13 +411,13 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
 
 do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0) ->
     Staleness1 = ?STALENESS:add_update(Staleness0, Sender, TimeStamp),
-    %{ok, {_, Clock}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-    %case (Clock<TimeStamp) of
-    %    true ->
-    {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
-    saturn_leaf_converger:handle(MyId, completed),
-    {Connector1, Staleness1}.
-    %    false ->
-    %        saturn_leaf_converger:handle(MyId, completed),
-    %        {Connector0, Staleness1}
-    %end.
+    {ok, {_, Clock}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    case (Clock<TimeStamp) of
+        true ->
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+            saturn_leaf_converger:handle(MyId, completed),
+            {Connector1, Staleness1};
+        false ->
+            saturn_leaf_converger:handle(MyId, completed),
+            {Connector0, Staleness1}
+    end.
