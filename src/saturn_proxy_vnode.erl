@@ -60,6 +60,7 @@
          collect_stats/3,
          new_gst/2,
          init_update/2,
+         init_list/2,
          check_ready/1]).
 
 -record(state, {partition,
@@ -104,6 +105,11 @@ update(Node, BKey, Value, Clock) ->
 init_update(Node, BKey) ->
     riak_core_vnode_master:sync_command(Node,
                                         {init_update, BKey},
+                                        ?PROXY_MASTER).
+
+init_list(Node, List) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        {init_list, List},
                                         ?PROXY_MASTER).
 
 async_update(Node, BKey, Value, Clock, Client) ->
@@ -250,6 +256,13 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
 
 handle_command({init_update, BKey}, _From, S0=#state{connector=Connector0}) ->
     {ok, Connector1} = ?BACKEND_CONNECTOR:init_update(Connector0, BKey),
+    {reply, ok, S0#state{connector=Connector1}};
+
+handle_command({init_list, List}, _From, S0=#state{connector=Connector0}) ->
+    Connector1 = lists:foldl(fun(BKey, Acc) ->
+                                {ok, Acc1} = ?BACKEND_CONNECTOR:init_update(Acc, BKey),
+                                Acc1
+                             end, Connector0, List),
     {reply, ok, S0#state{connector=Connector1}};
 
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
