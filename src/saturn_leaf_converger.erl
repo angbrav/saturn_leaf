@@ -103,15 +103,15 @@ handle_label({value, Label}, Queue) ->
             handle_label(ets_queue:peek(Queue1), Queue1);
         remote_reply ->
             Payload = Label#label.payload,
-            _Client = Payload#payload_reply.client,
-            _Value = Payload#payload_reply.value,
+            Client = Payload#payload_reply.client,
+            Value = Payload#payload_reply.value,
             case Payload#payload_reply.type_call of
                 sync ->
-                    noop;
-                    %riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                    %noop;
+                    riak_core_vnode:reply(Client, {ok, {Value, 0}});
                 async ->
-                    %gen_server:reply(Client, {ok, {Value, 0}})
-                    noop
+                    gen_server:reply(Client, {ok, {Value, 0}})
+                    %noop
             end,
             {_, Queue1} = ets_queue:out(Queue),
             handle_label(ets_queue:peek(Queue1), Queue1);
