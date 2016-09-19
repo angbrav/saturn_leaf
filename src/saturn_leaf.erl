@@ -60,17 +60,14 @@ clean() ->
     ok.
 
 init_store(Buckets, NKeys) ->
-    D = lists:foldl(fun(Bucket, Acc) ->
-                        lists:foldl(fun(Key, AccIn) ->
-                                        DocIdx = riak_core_util:chash_key({Bucket, Key}),
-                                        PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-                                        [{IndexNode, _Type}] = PrefList,
-                                        dict:append(IndexNode, {Bucket, Key}, AccIn)
-                                    end, Acc, lists:seq(1, NKeys))
-                     end, dict:new(), Buckets),
-    lists:foreach(fun({IndexNode, List}) ->
-                    ok = saturn_proxy_vnode:init_list(IndexNode, List)
-                  end, dict:to_list(D)),
+    lists:foreach(fun(Bucket) ->
+                    lists:foreach(fun(Key) ->
+                                    DocIdx = riak_core_util:chash_key({Bucket, Key}),
+                                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+                                    [{IndexNode, _Type}] = PrefList,
+                                    ok = saturn_proxy_vnode:init_update(IndexNode, {Bucket, Key})
+                                   end, lists:seq(1, NKeys))
+                  end, Buckets),
     ok.
     
 collect_stats(From, Type) ->
