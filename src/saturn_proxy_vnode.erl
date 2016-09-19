@@ -254,8 +254,7 @@ handle_command({read, BKey, Clock}, From, S0) ->
         {ok, Value} ->
             {reply, {ok, Value}, S0};
         {remote, S1} ->
-            {reply, {ok, value}, S1}
-            %{noreply, S1}
+            {noreply, S1}
     end;
 
 handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
@@ -267,7 +266,8 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Value}),
             {noreply, S0};
         {remote, S1} ->
-            {noreply, S1}
+            {reply, {ok, value}, S1}
+            %{noreply, S1}
     end;
 
 handle_command({update, BKey, Value, Clock}, _From, S0) ->
