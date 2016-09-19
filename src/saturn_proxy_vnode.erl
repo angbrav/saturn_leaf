@@ -254,7 +254,8 @@ handle_command({read, BKey, Clock}, From, S0) ->
         {ok, Value} ->
             {reply, {ok, Value}, S0};
         {remote, S1} ->
-            {noreply, S1}
+            {reply, {ok, value}, S1}
+            %{noreply, S1}
     end;
 
 handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
