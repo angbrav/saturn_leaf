@@ -241,7 +241,7 @@ handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, v
                             end, dict:new(), FilteredEntries),
     {reply, ok, S0#state{vv=VV1, vv_remote=VVRemote1, myid=MyId, remotes=Pendings1}};
 
-handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition}) ->
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition, remotes=Pendings0}) ->
     Entries = lists:seq(0, NLeaves-1),
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
@@ -250,6 +250,9 @@ handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manage
     VVRemote1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, dict:new(), FilteredEntries),
+     lists:foreach(fun({_, Queue}) ->
+                    ok = ets_queue:delete(Queue)
+                  end, dict:to_list(Pendings0)),
     Pendings1 = lists:foldl(fun(Entry, Acc) ->
                                 Name = list_to_atom(integer_to_list(Partition) ++ integer_to_list(Entry) ++  atom_to_list(gentlerain_pops)),
                                 dict:store(Entry, ets_queue:new(Name), Acc)
@@ -306,7 +309,7 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Result}),
             {noreply, S1};
         {remote, S1} ->
-            gen_server:reply(Client, {ok, {bottom, 0, 0}}),
+            %gen_server:reply(Client, {ok, {bottom, 0, 0}}),
             {noreply, S1};
         {error, Reason} ->
             gen_server:reply(Client, {error, Reason}),
@@ -454,7 +457,7 @@ flush_pending_operations_internal({value, Next}, Queue, GST, Connector0, Receive
             {Queue, Connector0, Staleness}
     end.
 
-handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness, MyId) ->
+handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness, MyId) ->
     case Type of
         update ->
             {BKey, Value, TimeStamp, Sender} = Payload,
@@ -469,14 +472,14 @@ handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness, MyId) ->
             saturn_leaf_converger:remote_reply(Receiver, MyId, BKey, StoredValue, Client, StoredTimeStamp, Call),
             {Connector0, Staleness1};
         remote_reply ->
-            {_Value, _Client, _Clock, Call} = Payload,
+            {Value, Client, Clock, Call} = Payload,
             case Call of
                 sync ->
-                    noop;
-                    %riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}});
+                    %noop;
+                    riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}});
                 async ->
-                    noop
-                    %gen_server:reply(Client, {ok, {Value, Clock, GST}})
+                    %noop
+                    gen_server:reply(Client, {ok, {Value, Clock, GST}})
             end,
             {Connector0, Staleness};
         _ ->
