@@ -72,7 +72,8 @@ init_store(Buckets, NKeys) ->
     
 collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    GrossPrefLists = riak_core_ring:all_preflists(Ring, 1),
+    GrossPrefLists0 = riak_core_ring:all_preflists(Ring, 1),
+    GrossPrefLists = lists:sublist(GrossPrefLists0, 3),
     FinalStatsRaw = lists:foldl(fun(PrefList, Acc) ->
                                     {ok, Stats} = saturn_proxy_vnode:collect_stats(hd(PrefList), From, Type),
                                     ?STALENESS:merge_raw(Acc, Stats)
