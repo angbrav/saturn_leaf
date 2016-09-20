@@ -296,6 +296,7 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Result}),
             {noreply, S1};
         {remote, S1} ->
+            gen_server:reply(Client, {ok, {bottom, 0}}),
             {noreply, S1};
         {error, Reason} ->
             gen_server:reply(Client, {error, Reason}),
@@ -431,7 +432,7 @@ flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
             flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
     end.
 
-handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
+handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness) ->
     case Type of
         update ->
             {BKey, Value, TimeStamp, Sender} = Payload,
@@ -446,12 +447,14 @@ handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness) ->
             saturn_leaf_converger:remote_reply(Receiver, BKey, StoredValue, Client, StoredTimeStamp, Call),
             {Connector0, Staleness1};
         remote_reply ->
-            {Value, Client, Clock, Call} = Payload,
+            {_Value, _Client, _Clock, Call} = Payload,
             case Call of
                 sync ->
-                    riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}});
+                    noop;
+                    %riak_core_vnode:reply(Client, {ok, {Value, Clock, GST}});
                 async ->
-                    gen_server:reply(Client, {ok, {Value, Clock, GST}})
+                    noop
+                    %gen_server:reply(Client, {ok, {Value, Clock, GST}})
             end,
             {Connector0, Staleness};
         _ ->
