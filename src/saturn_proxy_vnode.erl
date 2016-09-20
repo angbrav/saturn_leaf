@@ -296,7 +296,7 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Result}),
             {noreply, S1};
         {remote, S1} ->
-            gen_server:reply(Client, {ok, {bottom, 0}}),
+            gen_server:reply(Client, {ok, {bottom, 0, 0}}),
             {noreply, S1};
         {error, Reason} ->
             gen_server:reply(Client, {error, Reason}),
