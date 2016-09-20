@@ -201,7 +201,8 @@ init([Partition]) ->
                 manager=Manager,
                 last_physical=0,
                 connector=Connector,
-                staleness=Staleness
+                staleness=Staleness,
+                remotes=dict:new(),
                }}.
 
 check_ready(Function) ->
