@@ -20,7 +20,7 @@ init(Name) ->
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes, [{0,0}]}.
+    {0, Updates, 0, Remotes, [], {0,0}}.
 
 clean(Data, Name) ->
     {_IdUp, Updates, _IdRem, Remotes} = Data,
@@ -30,39 +30,71 @@ clean(Data, Name) ->
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes, [{0,0}]}.
-
-add_remote(Data, Sender, TimeStamp) ->
-    %Dif = saturn_utilities:now_microsec() - TimeStamp,
-    {IdUp, Updates, IdRem, Remotes, GSTs} = Data,
-    true = ets:insert(Remotes, {IdRem, {Sender, TimeStamp}}),
-    {IdUp, Updates, IdRem+1, Remotes, GSTs}.
+    {0, Updates, 0, Remotes, [], {0,0}}.
 
 add_update(Data, Sender, TimeStamp) ->
     %Dif = saturn_utilities:now_microsec() - TimeStamp,
-    {IdUp, Updates, IdRem, Remotes, GSTs} = Data,
-    true = ets:insert(Updates, {IdUp, {Sender, TimeStamp}}),
-    {IdUp+1, Updates, IdRem, Remotes, GSTs}.
+    {IdUp, Updates, IdRem, Remotes, Pending, Stable} = Data,
+    case Sender of
+        ?SENDER_STALENESS ->
+            {GST, When} = Stable,
+            case GST >= TimeStamp of
+                true ->
+                    ets:insert(Updates, {IdUp, {Sender, When - TimeStamp}}),
+                    {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
+                false ->
+                    {IdUp, Updates, IdRem, Remotes, [{TimeStamp, Sender}|Pending], Stable}
+            end;
+        _ ->
+            {IdUp, Updates, IdRem, Remotes, Pending, Stable}
+    end.
+
+add_remote(Data, Sender, TimeStamp) ->
+    %Dif = saturn_utilities:now_microsec() - TimeStamp,
+    {IdUp, Updates, IdRem, Remotes, Pending, Stable} = Data,
+    true = ets:insert(Remotes, {IdRem, {Sender, TimeStamp}}),
+    {IdUp, Updates, IdRem+1, Remotes, Pending, Stable}.
 
 add_gst(Data, GST) ->
-    {IdUp, Updates, IdRem, Remotes, GSTs} = Data,
-    [{MaxGST,_}|_] = GSTs,
+    {IdUp, Updates, IdRem, Remotes, Pending, Stable} = Data,
+    {MaxGST,_} = Stable,
     case GST > MaxGST of
         true ->
             Time = saturn_utilities:now_microsec(),
-            {IdUp, Updates, IdRem, Remotes, [{GST, Time}|GSTs]};
+            case process_pending(Pending, GST, Time, Updates, IdUp, []) of
+                {ok, _, IdUp} ->
+                    {IdUp, Updates, IdRem, Remotes, Pending, {GST, Time}};
+                {ok, Pending1, IdUp1} ->
+                    {IdUp1, Updates, IdRem, Remotes, Pending1, {GST, Time}}
+            end;
         false ->
-            {IdUp, Updates, IdRem, Remotes, GSTs}
+            {IdUp, Updates, IdRem, Remotes, Pending, Stable}
+    end.
+
+process_pending([], _GST, _When, _Updates, IdUp, _NewPending) ->
+    {ok, whole, IdUp};
+
+process_pending([Next|Rest]=List, GST, When, Updates, IdUp, NewPending) ->
+    {Time, _Sender} = Next,
+    case Time > GST of
+        true ->
+            process_pending(Rest, GST, When, Updates, IdUp, [Next|NewPending]);
+        false ->
+            IdUp1=lists:foldl(fun({ElemTime, ElemSender}, Acc) ->
+                                ets:insert(Updates, {Acc, {ElemSender, When - ElemTime}}),
+                                Acc+1
+                              end, IdUp, List),
+            {ok, IdUp1, lists:reverse(NewPending)}
     end.
 
 compute_raw(Data, From, Type) ->
     case Type of
         updates ->
-            {IdUp, Updates, _IdRem, _Remotes, GSTs} = Data,
-            get_ordered(From, Updates, IdUp, GSTs);
+            {IdUp, Updates, _IdRem, _Remotes, _Pending, _Stable} = Data,
+            get_ordered(From, Updates, IdUp);
         remotes ->
-            {_IdUp, _Updates, IdRem, Remotes, GSTs} = Data,
-            get_ordered(From, Remotes, IdRem, GSTs)
+            {_IdUp, _Updates, IdRem, Remotes, _Pending, _Stable} = Data,
+            get_ordered(From, Remotes, IdRem)
     end.
 
 merge_raw(FinalList, NewList) ->
@@ -89,39 +121,16 @@ compute_size([Next|Rest], Counter)->
     {_Time, List} = Next,
     compute_size(Rest, Counter + length(List)).
 
-get_ordered(From, Table, Id, GSTs) ->
+get_ordered(From, Table, Id) ->
     lists:foldl(fun(Key, List0) ->
                     [{Key, {Sender, Time}}] = ets:lookup(Table, Key),
                     case Sender of
                         From ->
-                            case compute_time(GSTs, no_gst, Time) of
-                                {ok, no_gst} ->
-                                    List0;
-                                {ok, Stable} ->
-                                    Dif = Stable - Time,
-                                    orddict:append(Dif, v, List0)
-                            end;
+                            orddict:append(Time, v, List0);
                         _ ->
                             List0
                     end
                 end, [], lists:seq(0, Id-1)).
-
-compute_time([], Previous, _Time) ->
-    {ok, Previous};
-
-compute_time([Next|Rest], Previous, Time) ->
-    {GST, When} = Next,
-    case GST > Time of
-        true ->
-            compute_time(Rest, When, Time);
-        false ->
-            case GST < Time of
-                true ->
-                    {ok, Previous};
-                false ->
-                    {ok, When}
-            end
-    end.
 
 generate_percentiles([], _Counter, [], Times) ->
     Times;
@@ -139,14 +148,13 @@ generate_percentiles([Next|Rest], Counter, [NextStep|RestSteps]=Steps, Times) ->
 
 get_ordered_test() ->
     Table = ets:new(test_gr_handler, [set, named_table, private]),
-    true = ets:insert(Table, {0, {sender1, 10}}),
+    true = ets:insert(Table, {0, {sender1, 60}}),
     true = ets:insert(Table, {1, {sender1, 30}}),
     true = ets:insert(Table, {2, {sender2, 70}}),
     true = ets:insert(Table, {3, {sender1, 90}}),
-    true = ets:insert(Table, {4, {sender1, 100}}),
-    GSTs = [{110, 200}, {50, 100}, {15, 50}],
-    ?assertEqual([{40, [v]}, {70, [v]}, {100, [v]}, {110, [v]}], get_ordered(sender1, Table, 5, GSTs)).
-    
+    true = ets:insert(Table, {4, {sender1, 10}}),
+    ?assertEqual([{10, [v]}, {30, [v]}, {60, [v]}, {90, [v]}], get_ordered(sender1, Table, 5)). 
+
 generate_liststeps_test() ->
     List = [{1, [v]}, {2, [v]}, {3, [v]},
             {4, [v]}, {5, [v]}, {6, [v]}, 
@@ -167,12 +175,5 @@ generate_percentiles_test() ->
             {190, [v]}, {200, [v]}, {210, [v]}],
     ListSteps = get_liststeps(List),
     ?assertEqual([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 210], generate_percentiles(List, 0, ListSteps, [])).
-
-compute_time_test() ->
-    GSTs = [{5, 7}, {3, 6}, {1, 2}],
-    ?assertEqual({ok, no_gst}, compute_time(GSTs, no_gst, 6)),
-    ?assertEqual({ok, 6}, compute_time(GSTs, no_gst, 3)),
-    ?assertEqual({ok, 7}, compute_time(GSTs, no_gst, 4)),
-    ?assertEqual({ok, 7}, compute_time(GSTs, no_gst, 5)).
 
 -endif.

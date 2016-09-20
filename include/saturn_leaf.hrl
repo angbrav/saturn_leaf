@@ -58,3 +58,4 @@
 -define(STALENESS, stats_cdf_gr_handler).
 -define(PERCENTILES, 20).
 -define(VERSION_THOLD, 10).
+-define(SENDER_STALENESS, 3).
