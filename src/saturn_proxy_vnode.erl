@@ -462,7 +462,7 @@ handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness) ->
             {Connector0, Staleness}
     end.
 
-do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness0, remotes=Remotes0}) ->
+do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness0, remotes=Remotes0}) ->
     GST1 = max(GST0, ClientGST),
     {Remotes1, Staleness1} = flush_remotes(Remotes0, GST1, Connector0, Receivers, Staleness0, []),
     Groups = Manager#state_manager.groups,
@@ -472,10 +472,27 @@ do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{myid=MyId, connect
             {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey, GST1, MyId}),
             {ok, {Value, Ts, GST1}, S0#state{gst=GST1, staleness=Staleness1, remotes=Remotes1}};
         {ok, Id} ->
+            Clock = max(ClientGST, ClientClock),
+            PhysicalClock0 = saturn_utilities:now_microsec(),
+            PhysicalClock1 = max(PhysicalClock0, LastPhysical+1),
+            Dif = Clock - PhysicalClock1,
+            case Dif==0 of
+                true ->
+                    TimeStamp = PhysicalClock1 + 1;
+                false ->
+                    case Dif > 0 of
+                        true ->
+                            timer:sleep(trunc(Dif/1000)),
+                            TimeStamp = Clock + 1;
+                        false ->
+                            TimeStamp = PhysicalClock1
+                    end
+            end,
+            VV1 = dict:store(MyId, TimeStamp, VV0),
             %Remote read
             Receiver = dict:fetch(Id, Receivers),
-            saturn_leaf_converger:remote_read(Receiver, BKey, MyId, max(ClientGST, ClientClock), From, Type),
-            {remote, S0#state{gst=GST1, staleness=Staleness1, remotes=Remotes1}};
+            saturn_leaf_converger:remote_read(Receiver, BKey, MyId, TimeStamp, From, Type),
+            {remote, S0#state{gst=GST1, staleness=Staleness1, remotes=Remotes1, last_physical=PhysicalClock1}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
