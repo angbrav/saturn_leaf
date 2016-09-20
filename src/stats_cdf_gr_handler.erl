@@ -23,7 +23,7 @@ init(Name) ->
     {0, Updates, 0, Remotes, [], {0,0}}.
 
 clean(Data, Name) ->
-    {_IdUp, Updates, _IdRem, Remotes} = Data,
+    {_IdUp, Updates, _IdRem, Remotes, _, _} = Data,
     true = ets:delete(Updates),
     true = ets:delete(Remotes),
     NUpdates = list_to_atom(atom_to_list(Name) ++ "_updates"),
