@@ -49,7 +49,7 @@
          async_update/5,
          propagate/5,
          remote_read/6,
-         remote_reply/5,
+         remote_reply/6,
          send_heartbeat/1,
          heartbeat/3,
          compute_times/1,
@@ -130,9 +130,9 @@ remote_read(Node, BKey, Sender, Clock, Client, Type) ->
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
-remote_reply(Node, Value, Client, Clock, Type) ->
+remote_reply(Node, Sender, Value, Client, Clock, Type) ->
     riak_core_vnode_master:command(Node,
-                                   {remote_reply, Value, Client, Clock, Type},
+                                   {remote_reply, Sender, Value, Client, Clock, Type},
                                    {fsm, undefined, self()},
                                    ?PROXY_MASTER).
 
@@ -201,8 +201,7 @@ init([Partition]) ->
                 manager=Manager,
                 last_physical=0,
                 connector=Connector,
-                staleness=Staleness,
-                remotes=[]
+                staleness=Staleness
                }}.
 
 check_ready(Function) ->
@@ -228,7 +227,7 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
 
-handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, vv_remote=VVRemote0}) ->
+handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, vv_remote=VVRemote0, partition=Partition}) ->
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
@@ -236,9 +235,13 @@ handle_command({init_vv, Entries, _Partitions, MyId}, _From, S0=#state{vv=VV0, v
     VVRemote1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, VVRemote0, FilteredEntries),
-    {reply, ok, S0#state{vv=VV1, vv_remote=VVRemote1, myid=MyId}};
+    Pendings1 = lists:foldl(fun(Entry, Acc) ->
+                                Name = list_to_atom(integer_to_list(Partition) ++ integer_to_list(Entry) ++  atom_to_list(gentlerain_pops)),
+                                dict:store(Entry, ets_queue:new(Name), Acc)
+                            end, dict:new(), FilteredEntries),
+    {reply, ok, S0#state{vv=VV1, vv_remote=VVRemote1, myid=MyId, remotes=Pendings1}};
 
-handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId}) ->
+handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manager, myid=MyId, partition=Partition}) ->
     Entries = lists:seq(0, NLeaves-1),
     FilteredEntries = lists:delete(MyId, Entries),
     VV1 = lists:foldl(fun(Entry, Acc) ->
@@ -247,7 +250,11 @@ handle_command({set_tree, Paths, Tree, NLeaves}, _From, S0=#state{manager=Manage
     VVRemote1 = lists:foldl(fun(Entry, Acc) ->
                         dict:store(Entry, 0, Acc)
                      end, dict:new(), FilteredEntries),
-    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}, vv=VV1, vv_remote=VVRemote1}};
+    Pendings1 = lists:foldl(fun(Entry, Acc) ->
+                                Name = list_to_atom(integer_to_list(Partition) ++ integer_to_list(Entry) ++  atom_to_list(gentlerain_pops)),
+                                dict:store(Entry, ets_queue:new(Name), Acc)
+                            end, dict:new(), FilteredEntries),
+    {reply, ok, S0#state{manager=Manager#state_manager{tree=Tree, paths=Paths, nleaves=NLeaves}, vv=VV1, vv_remote=VVRemote1, remotes=Pendings1}};
 
 handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
@@ -268,16 +275,19 @@ handle_command({init_list, List}, _From, S0=#state{connector=Connector0}) ->
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
 
-handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, staleness=Staleness}) ->
+handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, vv=VV, vv_remote=VVRemote, staleness=Staleness, remotes=Pendings0}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
     Name2 = list_to_atom(integer_to_list(Partition) ++ atom_to_list(staleness)),
     Staleness1 = ?STALENESS:clean(Staleness, Name2),
+    Pendings1 = lists:foldl(fun({Entry, Queue}, Acc) ->
+                                dict:store(Entry, ets_queue:clean(Queue), Acc)
+                            end, dict:new(), dict:to_list(Pendings0)),
     {reply, ok, S0#state{vv=clean_vector(VV),
                          vv_remote=clean_vector(VVRemote),
                          gst=0,
                          last_physical=0,
                          staleness=Staleness1,
-                         remotes=[],
+                         remotes=Pendings1,
                          connector=Connector1}};
 
 handle_command({read, BKey, Clock}, From, S0) ->
@@ -296,7 +306,7 @@ handle_command({async_read, BKey, Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Result}),
             {noreply, S1};
         {remote, S1} ->
-            gen_server:reply(Client, {ok, {bottom, 0}}),
+            gen_server:reply(Client, {ok, {bottom, 0, 0}}),
             {noreply, S1};
         {error, Reason} ->
             gen_server:reply(Client, {error, Reason}),
@@ -315,35 +325,39 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
 handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
-handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, receivers=Receivers, staleness=Staleness}) ->
+handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, receivers=Receivers, staleness=Staleness, myid=MyId}) ->
     %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, TimeStamp, Sender]),
     VV1 = dict:store(Sender, TimeStamp, VV0),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, TimeStamp]),
-    {Connector1, Staleness1} = handle_operation(update, {BKey, Value, TimeStamp, Sender}, Connector0, GST, Receivers, Staleness),
+    {Connector1, Staleness1} = handle_operation(update, {BKey, Value, TimeStamp, Sender}, Connector0, GST, Receivers, Staleness, MyId),
     {noreply, S0#state{vv=VV1, connector=Connector1, staleness=Staleness1}};
 
-handle_command({remote_read, BKey, Sender, Clock, Client, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Remotes0}) ->
+handle_command({remote_read, BKey, Sender, Clock, Client, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Pendings0, myid=MyId}) ->
     %lager:info("Received a remote read. Key ~p, Sender ~p, TS ~p, Client ~p",[BKey, Sender, Clock, Client]),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
-            {Connector1, Staleness1} = handle_operation(remote_read, {BKey, Sender, Client, Type, Clock}, Connector0, GST, Receivers, Staleness),
+            {Connector1, Staleness1} = handle_operation(remote_read, {BKey, Sender, Client, Type, Clock}, Connector0, GST, Receivers, Staleness, MyId),
             {noreply, S0#state{connector=Connector1, staleness=Staleness1}};
         false ->
-            Remotes1 = [{Clock, Sender, {remote_read, {BKey, Sender, Client, Type, Clock}}}|Remotes0],
-            {noreply, S0#state{remotes=Remotes1}}
+            Queue0 = dict:fetch(Sender, Pendings0),
+            Queue1 = ets_queue:in({Clock, Sender, {remote_read, {BKey, Sender, Client, Type, Clock}}}, Queue0),
+            Pendings1 = dict:store(Sender, Queue1, Pendings0),
+            {noreply, S0#state{remotes=Pendings1}}
     end;
 
-handle_command({remote_reply, Value, Client, Clock, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Remotes0}) ->
+handle_command({remote_reply, Sender, Value, Client, Clock, Type}, _From, S0=#state{connector=Connector0, gst=GST, receivers=Receivers, staleness=Staleness, remotes=Pendings0, myid=MyId}) ->
     %lager:info("Received a remote reply. Value ~p, Client ~p, Clock ~p",[Value, Client, Clock]),
     %lager:info("GST: ~p, Timestamp: ~p", [GST, Clock]),
     case GST >= Clock of
         true ->
-            {Connector1, Staleness1} = handle_operation(remote_reply, {Value, Client, Clock, Type}, Connector0, GST, Receivers, Staleness),
+            {Connector1, Staleness1} = handle_operation(remote_reply, {Value, Client, Clock, Type}, Connector0, GST, Receivers, Staleness, MyId),
             {noreply, S0#state{connector=Connector1, staleness=Staleness1}};
         false ->
-            Remotes1 = [{Clock, Client, {remote_reply, {Value, Client, Clock, Type}}}|Remotes0],
-            {noreply, S0#state{remotes=Remotes1}}
+            Queue0 = dict:fetch(Sender, Pendings0),
+            Queue1 = ets_queue:in({Clock, Client, {remote_reply, {Value, Client, Clock, Type}}}, Queue0),
+            Pendings1 = dict:store(Sender, Queue1, Pendings0),
+            {noreply, S0#state{remotes=Pendings1}}
     end;
 
 handle_command(send_heartbeat, _From, S0=#state{partition=Partition, vv=VV0, vv_remote=VVRemote0, myid=MyId, receivers=Receivers}) ->
@@ -377,10 +391,10 @@ handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition}) ->
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
     {noreply, S0};
 
-handle_command({new_gst, GST}, _From, S0=#state{receivers=Receivers, staleness=Staleness0, connector=Connector0, remotes=Remotes0}) ->
+handle_command({new_gst, GST}, _From, S0=#state{receivers=Receivers, staleness=Staleness0, connector=Connector0, remotes=Pendings0, myid=MyId}) ->
     %lager:info("New gst ~p", [GST]),
-    {Remotes1, Staleness1} = flush_remotes(Remotes0, GST, Connector0, Receivers, Staleness0, []),
-    {noreply, S0#state{gst=GST, staleness=Staleness1, remotes=Remotes1}};
+    {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings0, GST, Connector0, Receivers, Staleness0, MyId),  
+    {noreply, S0#state{gst=GST, staleness=Staleness1, remotes=Pendings1, connector=Connector1}};
 
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
@@ -419,20 +433,28 @@ handle_exit(_Pid, _Reason, State) ->
 terminate(_Reason, _State) ->
     ok.
 
-flush_remotes([], _GST, _Connector0, _Receivers, Staleness, Left) ->
-    {Left, Staleness};
+flush_pending_operations(PendingsBase, GST, Connector, Receivers, Staleness, MyId) ->
+    lists:foldl(fun({Entry, Queue}, {Pendings0, Connector0, Staleness0}) ->
+                    {Queue1, Connector1, Staleness1} = flush_pending_operations_internal(ets_queue:peek(Queue), Queue, GST, Connector0, Receivers, Staleness0, MyId),
+                    Pendings1 = dict:store(Entry, Queue1, Pendings0),
+                    {Pendings1, Connector1, Staleness1}
+                end, {dict:new(), Connector, Staleness}, dict:to_list(PendingsBase)).
+   
+flush_pending_operations_internal(empty, Queue, _GST, Connector0, _Receivers, Staleness, _MyId) ->
+    {Queue, Connector0, Staleness};
 
-flush_remotes([Next|Rest], GST, Connector0, Receivers, Staleness, Left) ->
-    {TimeStamp, _Sender, {Type, Payload}} = Next,
+flush_pending_operations_internal({value, Next}, Queue, GST, Connector0, Receivers, Staleness, MyId) ->
+    {TimeStamp, _Sender, {Op, Payload}} = Next,
     case (TimeStamp =< GST) of
         true ->
-            {_Connector1, Staleness1} = handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness),
-            flush_remotes(Rest, GST, Connector0, Receivers, Staleness1, Left);
+            {Connector1, Staleness1} = handle_operation(Op, Payload, Connector0, GST, Receivers, Staleness, MyId),
+            {{value, _}, Queue1} = ets_queue:out(Queue),
+            flush_pending_operations_internal(ets_queue:peek(Queue1), Queue1, GST, Connector1, Receivers, Staleness1, MyId);
         false ->
-            flush_remotes(Rest, GST, Connector0, Receivers, Staleness, [Next|Left])
+            {Queue, Connector0, Staleness}
     end.
 
-handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness) ->
+handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness, MyId) ->
     case Type of
         update ->
             {BKey, Value, TimeStamp, Sender} = Payload,
@@ -444,7 +466,7 @@ handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness) ->
             Staleness1 = ?STALENESS:add_remote(Staleness, Sender, TimeStamp),
             {ok, {StoredValue, StoredTimeStamp}} = ?BACKEND_CONNECTOR:remote_read(Connector0, {BKey, latest}),
             Receiver = dict:fetch(Sender, Receivers),
-            saturn_leaf_converger:remote_reply(Receiver, BKey, StoredValue, Client, StoredTimeStamp, Call),
+            saturn_leaf_converger:remote_reply(Receiver, MyId, BKey, StoredValue, Client, StoredTimeStamp, Call),
             {Connector0, Staleness1};
         remote_reply ->
             {_Value, _Client, _Clock, Call} = Payload,
@@ -462,15 +484,15 @@ handle_operation(Type, Payload, Connector0, _GST, Receivers, Staleness) ->
             {Connector0, Staleness}
     end.
 
-do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness0, remotes=Remotes0}) ->
+do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness0, remotes=Pendings0, vv=VV0}) ->
     GST1 = max(GST0, ClientGST),
-    {Remotes1, Staleness1} = flush_remotes(Remotes0, GST1, Connector0, Receivers, Staleness0, []),
+    {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings0, GST1, Connector0, Receivers, Staleness0, MyId),  
     Groups = Manager#state_manager.groups,
     Tree = Manager#state_manager.tree,
     case groups_manager:get_closest_dcid(BKey, Groups, MyId, Tree) of
         {ok, MyId} ->
-            {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey, GST1, MyId}),
-            {ok, {Value, Ts, GST1}, S0#state{gst=GST1, staleness=Staleness1, remotes=Remotes1}};
+            {ok, {Value, Ts}} = ?BACKEND_CONNECTOR:read(Connector1, {BKey, GST1, MyId}),
+            {ok, {Value, Ts, GST1}, S0#state{gst=GST1, staleness=Staleness1, remotes=Pendings1, connector=Connector1}};
         {ok, Id} ->
             Clock = max(ClientGST, ClientClock),
             PhysicalClock0 = saturn_utilities:now_microsec(),
@@ -492,7 +514,7 @@ do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=Last
             %Remote read
             Receiver = dict:fetch(Id, Receivers),
             saturn_leaf_converger:remote_read(Receiver, BKey, MyId, TimeStamp, From, Type),
-            {remote, S0#state{gst=GST1, staleness=Staleness1, remotes=Remotes1, last_physical=PhysicalClock1}};
+            {remote, S0#state{gst=GST1, staleness=Staleness1, remotes=Pendings1, last_physical=PhysicalClock1, connector=Connector1, vv=VV1}};
         {error, Reason} ->
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason]),
             {error, Reason}
