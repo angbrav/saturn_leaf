@@ -39,6 +39,12 @@ add_update(Data, Sender, TimeStamp) ->
         ?SENDER_STALENESS ->
             {_GST, _When} = Stable,
             ets:insert(Updates, {IdUp, {Sender, Dif}}),
+            case IdUp rem 1000 of
+                0 ->
+                    lager:info("Remote update dif: ~p" ,[Dif]);
+                _ ->
+                    noop
+            end,
             {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
             %case GST >= TimeStamp of
             %    true ->
