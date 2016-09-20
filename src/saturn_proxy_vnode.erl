@@ -394,8 +394,9 @@ handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition}) ->
     riak_core_vnode:send_command_after(?TIMES_FREQ, compute_times),
     {noreply, S0};
 
-handle_command({new_gst, GST}, _From, S0=#state{receivers=Receivers, staleness=Staleness0, connector=Connector0, remotes=Pendings0, myid=MyId}) ->
+handle_command({new_gst, GST}, _From, S0=#state{receivers=Receivers, staleness=Staleness, connector=Connector0, remotes=Pendings0, myid=MyId}) ->
     %lager:info("New gst ~p", [GST]),
+    Staleness0 = ?STALENESS:add_gst(Staleness, GST),
     {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings0, GST, Connector0, Receivers, Staleness0, MyId),  
     {noreply, S0#state{gst=GST, staleness=Staleness1, remotes=Pendings1, connector=Connector1}};
 
@@ -487,8 +488,9 @@ handle_operation(Type, Payload, Connector0, GST, Receivers, Staleness, MyId) ->
             {Connector0, Staleness}
     end.
 
-do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness0, remotes=Pendings0, vv=VV0}) ->
+do_read(Type, BKey, {ClientGST, ClientClock}, From, S0=#state{last_physical=LastPhysical, myid=MyId, connector=Connector0, gst=GST0, receivers=Receivers, manager=Manager, staleness=Staleness, remotes=Pendings0, vv=VV0}) ->
     GST1 = max(GST0, ClientGST),
+    Staleness0 = ?STALENESS:add_gst(Staleness, GST1),
     {Pendings1, Connector1, Staleness1} = flush_pending_operations(Pendings0, GST1, Connector0, Receivers, Staleness0, MyId),  
     Groups = Manager#state_manager.groups,
     Tree = Manager#state_manager.tree,
