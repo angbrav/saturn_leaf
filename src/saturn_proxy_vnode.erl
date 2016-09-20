@@ -202,7 +202,7 @@ init([Partition]) ->
                 last_physical=0,
                 connector=Connector,
                 staleness=Staleness,
-                remotes=dict:new(),
+                remotes=dict:new()
                }}.
 
 check_ready(Function) ->
