@@ -84,7 +84,7 @@ process_pending([Next|Rest]=List, GST, When, Updates, IdUp, NewPending) ->
                                 ets:insert(Updates, {Acc, {ElemSender, When - ElemTime}}),
                                 Acc+1
                               end, IdUp, List),
-            {ok, IdUp1, lists:reverse(NewPending)}
+            {ok, lists:reverse(NewPending), IdUp1}
     end.
 
 compute_raw(Data, From, Type) ->
