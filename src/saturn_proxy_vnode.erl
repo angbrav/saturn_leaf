@@ -275,6 +275,7 @@ handle_command({async_read, BKey, _Clock, Client}, _From, S0) ->
             gen_server:reply(Client, {ok, Value}),
             {noreply, S0};
         remote ->
+            gen_server:reply(Client, {ok, {value, 0}}),
             {noreply, S0}
     end;
 
@@ -361,15 +362,18 @@ handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, stale
     Sender = Label#label.sender,
     TimeStamp = Label#label.timestamp,
     Staleness1 = ?STALENESS:add_remote(Staleness, Sender, TimeStamp),
-    {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
-    Client = Payload#payload_remote.client,
+    {ok, {_Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKey}),
+    _Client = Payload#payload_remote.client,
     case Payload#payload_remote.type_call of
         async ->
-            gen_server:reply(Client, {ok, {Value, 0}});
+            %gen_server:reply(Client, {ok, {Value, 0}});
+            noop;
         sync ->
-            riak_core_vnode:reply(Client, {ok, {Value, 0}});
+            %riak_core_vnode:reply(Client, {ok, {Value, 0}});
+            noop;
         tx ->
-            gen_fsm:send_event(Client, {new_value, BKey, Value});
+            %gen_fsm:send_event(Client, {new_value, BKey, Value});
+            noop;
         _ ->
             lager:error("Unknown type of call")
     end,
