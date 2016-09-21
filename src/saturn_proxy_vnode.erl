@@ -557,7 +557,7 @@ do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical, myid=MyId, c
         {ok, Group} ->
             VVRemote1 = lists:foldl(fun(Id, Acc) ->
                                         Receiver = dict:fetch(Id, Receivers),
-                                        saturn_leaf_converger:propagate(Receiver, BKey, Value, TimeStamp, MyId),
+                                        saturn_leaf_converger:propagate(Receiver, BKey, Value, saturn_utilities:now_microsec(), MyId),
                                         dict:store(Id, TimeStamp, Acc)
                                     end, VVRemote0, Group);
         {error, Reason2} ->
