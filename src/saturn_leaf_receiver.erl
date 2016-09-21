@@ -72,7 +72,7 @@ init([MyId]) ->
     lists:foreach(fun(Node) ->
                     saturn_client_receiver:init_vv(Node)
                   end, Nodes),
-    Convergers = [list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_leaf_converger)) || Node <- Nodes],
+    Convergers = [{saturn_leaf_converger, Node} || Node <- Nodes],
     case ZeroPreflist of
         not_found ->
             lager:error("Zero preflist not found", []);
