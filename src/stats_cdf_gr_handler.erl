@@ -33,26 +33,26 @@ clean(Data, Name) ->
     {0, Updates, 0, Remotes, [], {0,0}}.
 
 add_update(Data, Sender, TimeStamp) ->
-   % Dif = saturn_utilities:now_microsec() - TimeStamp,
+    Dif = saturn_utilities:now_microsec() - TimeStamp,
     {IdUp, Updates, IdRem, Remotes, Pending, Stable} = Data,
     case Sender of
         ?SENDER_STALENESS ->
-            {GST, When} = Stable,
-            %ets:insert(Updates, {IdUp, {Sender, Dif}}),
-            %case IdUp rem 1000 of
-            %    0 ->
-            %        lager:info("Remote update dif: ~p" ,[Dif]);
-            %    _ ->
-            %        noop
-            %end,
-            %{IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
-            case GST >= TimeStamp of
-                true ->
-                    ets:insert(Updates, {IdUp, {Sender, When - TimeStamp}}),
-                    {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
-                false ->
-                    {IdUp, Updates, IdRem, Remotes, [{TimeStamp, Sender}|Pending], Stable}
-            end;
+            {_GST, _When} = Stable,
+            ets:insert(Updates, {IdUp, {Sender, Dif}}),
+            case IdUp rem 1000 of
+                0 ->
+                    lager:info("Remote update dif: ~p" ,[Dif]);
+                _ ->
+                    noop
+            end,
+            {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
+            %case GST >= TimeStamp of
+            %    true ->
+            %        ets:insert(Updates, {IdUp, {Sender, When - TimeStamp}}),
+            %        {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
+            %    false ->
+            %        {IdUp, Updates, IdRem, Remotes, [{TimeStamp, Sender}|Pending], Stable}
+            %end;
         _ ->
             {IdUp, Updates, IdRem, Remotes, Pending, Stable}
     end.
