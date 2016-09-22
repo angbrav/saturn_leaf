@@ -25,7 +25,7 @@
 -define(MYIDPREFIX, {prefix, myid_prefix}).
 -define(MYIDKEY, myid_key).
 
--define(HEARTBEAT_FREQ, 5).
+-define(HEARTBEAT_FREQ, 15).
 -define(TIMES_FREQ, 5).
 
 -define(PROPAGATION_MODE, naive_erlang).
@@ -55,6 +55,6 @@
 
 %HOW TO TRACK REMOTE UPDATE VISBILITY LATENCIES
 %-define(STALENESS, mock_stats_handler).
--define(STALENESS, stats_cdf_handler).
+-define(STALENESS, stats_cdf_gr_handler).
 -define(PERCENTILES, 20).
 -define(VERSION_THOLD, 10).
