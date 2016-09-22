@@ -35,7 +35,7 @@
          propagate/5,
          remote_read/6, 
          set_zeropl/2,
-         remote_reply/6]).
+         remote_reply/7]).
 
 -record(state, {zeropl}).
                
@@ -48,8 +48,8 @@ propagate(Name, BKey, Value, TimeStamp, Sender) ->
 remote_read(Name, BKey, Sender, Clock, Client, Type) ->
     gen_server:cast(Name, {remote_read, BKey, Sender, Clock, Client, Type}).
 
-remote_reply(Name, BKey, Value, Client, Clock, Type) ->
-    gen_server:cast(Name, {remote_reply, BKey, Value, Client, Clock, Type}).
+remote_reply(Name, Sender, BKey, Value, Client, Clock, Type) ->
+    gen_server:cast(Name, {remote_reply, Sender, BKey, Value, Client, Clock, Type}).
  
 heartbeat(Name, Partition, Clock, Sender) ->
     gen_server:cast(Name, {heartbeat, Partition, Clock, Sender}).
@@ -81,11 +81,11 @@ handle_cast({remote_read, BKey, Sender, Clock, Client, Type}, S0) ->
     saturn_proxy_vnode:remote_read(IndexNode, BKey, Sender, Clock, Client, Type),
     {noreply, S0};
 
-handle_cast({remote_reply, BKey, Value, Client, Clock, Type}, S0) ->
+handle_cast({remote_reply, Sender, BKey, Value, Client, Clock, Type}, S0) ->
     DocIdx = riak_core_util:chash_key(BKey),
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
-    saturn_proxy_vnode:remote_reply(IndexNode, Value, Client, Clock, Type),
+    saturn_proxy_vnode:remote_reply(IndexNode, Sender, Value, Client, Clock, Type),
     {noreply, S0};
 
 handle_cast({heartbeat, Partition, Clock, Sender}, S0=#state{zeropl=ZeroPreflist}) ->
