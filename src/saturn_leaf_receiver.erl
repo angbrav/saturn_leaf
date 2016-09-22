@@ -69,7 +69,7 @@ init([MyId]) ->
                                 end
                                end, not_found, GrossPrefLists),
     Nodes = riak_core_ring:all_members(Ring),
-    Convergers = [list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_leaf_converger)) || Node <- Nodes],
+    Convergers = [{saturn_leaf_converger, Node} || Node <- Nodes],
     case ZeroPreflist of
         not_found ->
             lager:error("Zero preflist not found", []);

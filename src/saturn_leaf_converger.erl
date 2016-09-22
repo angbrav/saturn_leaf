@@ -40,23 +40,22 @@
 -record(state, {zeropl}).
                
 start_link() ->
-    Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)),
-    gen_server:start({global, Name}, ?MODULE, [], []).
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
 propagate(Name, BKey, Value, TimeStamp, Sender) ->
-    gen_server:cast({global, Name}, {remote_update, BKey, Value, TimeStamp, Sender}).
+    gen_server:cast(Name, {remote_update, BKey, Value, TimeStamp, Sender}).
 
 remote_read(Name, BKey, Sender, Clock, Client, Type) ->
-    gen_server:cast({global, Name}, {remote_read, BKey, Sender, Clock, Client, Type}).
+    gen_server:cast(Name, {remote_read, BKey, Sender, Clock, Client, Type}).
 
 remote_reply(Name, BKey, Value, Client, Clock, Type) ->
-    gen_server:cast({global, Name}, {remote_reply, BKey, Value, Client, Clock, Type}).
+    gen_server:cast(Name, {remote_reply, BKey, Value, Client, Clock, Type}).
  
 heartbeat(Name, Partition, Clock, Sender) ->
-    gen_server:cast({global, Name}, {heartbeat, Partition, Clock, Sender}).
+    gen_server:cast(Name, {heartbeat, Partition, Clock, Sender}).
 
 set_zeropl(Name, ZeroPreflist) ->
-    gen_server:call({global, Name}, {set_zeropl, ZeroPreflist}, infinity).
+    gen_server:call(Name, {set_zeropl, ZeroPreflist}, infinity).
 
 init([]) ->
     {ok, #state{zeropl=not_found}}.
