@@ -45,6 +45,7 @@ add_update(Data, Sender, TimeStamp) ->
             %        noop
             %end,
             %{IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
+            %lager:info("Update timestamp: ~p", [dict:to_list(TimeStamp)]),
             {IdUp, Updates, IdRem, Remotes, [{TimeStamp, dict:fetch(Sender, TimeStamp), Sender}|Pending], Stable};
         _ ->
             {IdUp, Updates, IdRem, Remotes, Pending, Stable}

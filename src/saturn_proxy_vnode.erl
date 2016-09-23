@@ -449,8 +449,8 @@ handle_operation(Type, Payload, Connector0, Receivers, Staleness, MyId, GST, Las
     case Type of
         update ->
             {BKey, Value, TimeStamp, Sender} = Payload,
-            Clock = dict:fetch(Sender, TimeStamp),
-            Staleness1 = ?STALENESS:add_update(Staleness, Sender, Clock),
+            %Clock = dict:fetch(Sender, TimeStamp),
+            Staleness1 = ?STALENESS:add_update(Staleness, Sender, TimeStamp),
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
             {Connector1, Staleness1, LastPhysical};
         remote_read ->
