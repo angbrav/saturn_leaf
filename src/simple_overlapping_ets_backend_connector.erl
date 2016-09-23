@@ -61,7 +61,7 @@ read(ETS, Payload)->
     {BKey, Version} = Payload,
     case ets:lookup(ETS, BKey) of
         [] ->
-            lager:error("BKey ~p was not initialized", [BKey]),
+            %lager:error("BKey ~p was not initialized", [BKey]),
             {ok, {empty, dict:new()}};
         [{BKey, {_Length, [{TSMax, ValueMax}|_Rest]=List}}] ->
             case Version of
