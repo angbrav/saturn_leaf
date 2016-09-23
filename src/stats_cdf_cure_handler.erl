@@ -20,7 +20,7 @@ init(Name) ->
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes, [], {dict:new(),0}}.
+    {0, Updates, 0, Remotes, [], {init, 0}}.
 
 clean(Data, Name) ->
     {_IdUp, Updates, _IdRem, Remotes, _, _} = Data,
@@ -30,7 +30,7 @@ clean(Data, Name) ->
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes, [], {dict:new(),0}}.
+    {0, Updates, 0, Remotes, [], {init, 0}}.
 
 add_update(Data, Sender, TimeStamp) ->
     %Clock = dict:fetch(Sender, TimeStamp),
@@ -46,8 +46,8 @@ add_update(Data, Sender, TimeStamp) ->
             %        noop
             %end,
             %{IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
-            {GST, _} = Stable,
-            lager:info("Update timestamp: ~p, current GST: ~p", [dict:to_list(TimeStamp), dict:to_list(GST)]),
+            %{GST, _} = Stable,
+            %lager:info("Update timestamp: ~p, current GST: ~p", [dict:to_list(TimeStamp), dict:to_list(GST)]),
             {IdUp, Updates, IdRem, Remotes, [{TimeStamp, dict:fetch(Sender, TimeStamp), Sender}|Pending], Stable};
         _ ->
             {IdUp, Updates, IdRem, Remotes, Pending, Stable}
@@ -88,7 +88,6 @@ process_pending([Next|Rest]=List, ClockGST, GST, When, Updates, IdUp, NewPending
             {IdUp1, NewPending1}=lists:foldl(fun({ElemTS, ElemTime, ElemSender}=Elem, {IdUp0, Pending}) ->
                                                 case is_stable(dict:to_list(GST), ElemTS)  of
                                                     true ->
-                
                                                         ets:insert(Updates, {IdUp0, {ElemSender, When - ElemTime}}),
                                                         {IdUp0+1, Pending};
                                                     false ->
@@ -167,6 +166,9 @@ is_stable([{DC, Clock}|T], TimeStamp) ->
         _ ->
             false
     end.
+
+is_dominant([], init, _Greater) ->
+    true;
 
 is_dominant([], _TimeStamp, Greater) ->
     Greater;

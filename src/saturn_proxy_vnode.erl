@@ -383,7 +383,7 @@ handle_command(compute_times, _From, S0=#state{vv=VV, partition=Partition}) ->
 
 handle_command({new_gst, GST}, _From, S0=#state{connector=Connector0, receivers=Receivers, staleness=Staleness, remotes=Pendings0, myid=MyId, last_physical=LastPhysical}) ->
     GST1 = dict:erase(MyId, GST),
-    Staleness0 = ?STALENESS:add_gst(Staleness, GST),
+    Staleness0 = ?STALENESS:add_gst(Staleness, GST1),
     {Pendings1, Connector1, Staleness1, LastPhysical1} = flush_pending_operations(Pendings0, GST1, Connector0, Receivers, Staleness0, MyId, LastPhysical),  
     {noreply, S0#state{gst=GST1, staleness=Staleness1, remotes=Pendings1, connector=Connector1, last_physical=LastPhysical1}};
 
