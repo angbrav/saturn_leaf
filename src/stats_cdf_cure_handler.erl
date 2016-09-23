@@ -167,7 +167,7 @@ is_stable([{DC, Clock}|T], TimeStamp) ->
             false
     end.
 
-is_dominant([], init, _Greater) ->
+is_dominant(_, init, _Greater) ->
     true;
 
 is_dominant([], _TimeStamp, Greater) ->
