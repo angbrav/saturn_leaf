@@ -65,7 +65,6 @@
                 vv :: dict(),
                 vv_remote :: dict(),
                 gst :: dict(),
-                last_physical,
                 connector,
                 pops :: dict(),
                 receivers,
@@ -183,7 +182,6 @@ init([Partition]) ->
                 vv_remote=dict:new(),
                 gst=dict:new(),
                 manager=Manager,
-                last_physical=0,
                 pops=dict:new(),
                 remotes=[],
                 connector=Connector,
@@ -271,7 +269,6 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=P
     {reply, ok, S0#state{vv=VV1,
                          vv_remote=clean_vector(VVRemote),
                          gst=clean_vector(VVRemote),
-                         last_physical=0,
                          pops=Pendings1,
                          staleness=Staleness1,  
                          remotes=[],
@@ -511,8 +508,7 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, connector=Connector0, gst=
             {error, Reason, S0#state{connector=Connector1, pops=Pendings1, remotes=Remotes1, staleness=Staleness2}}
     end.
 
-do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical,
-                                        myid=MyId,
+do_update(BKey, Value, Clock, S0=#state{myid=MyId,
                                         connector=Connector0,
                                         vv=VV0,
                                         vv_remote=VVRemote0, 
@@ -522,6 +518,7 @@ do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical,
                                         staleness=Staleness,
                                         gst=GST0,
                                         remotes=Remotes0}) ->
+    LastPhysical = dict:fetch(MyId, VV0),
     PhysicalClock0 = saturn_utilities:now_microsec(),
     PhysicalClock1 = max(PhysicalClock0, LastPhysical+1),
     ClientLocalClock = dict:fetch(MyId, Clock),
@@ -564,7 +561,7 @@ do_update(BKey, Value, Clock, S0=#state{last_physical=LastPhysical,
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2]),
             VVRemote1 = VVRemote0
     end,
-    {{ok, OperationClock}, S1#state{last_physical=PhysicalClock1, vv=VV1, vv_remote=VVRemote1, pops=Pendings1, remotes=Remotes1}}.
+    {{ok, OperationClock}, S1#state{vv=VV1, vv_remote=VVRemote1, pops=Pendings1, remotes=Remotes1}}.
 
 clean_vector(Vector) ->
     lists:foldl(fun(Entry, Acc) ->
@@ -585,6 +582,7 @@ is_stable([{DC, Clock}|T], TimeStamp) ->
         {ok, Clock2} when (Clock>=Clock2) ->
             is_stable(T, TimeStamp);
         error ->
+            lager:error("Never here I guess: ~p", [dict:to_list(TimeStamp)]),
             is_stable(T, TimeStamp);
         _ ->
             false

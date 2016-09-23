@@ -133,18 +133,23 @@ handle_cast(_Info, State) ->
     {noreply, State}.
 
 handle_info(compute_clocks, S0=#state{siblings=Siblings, vv_lst=VV_LST, gst0=GST0}) ->
-    VV_LST1 = lists:foldl(fun({Id, LST}, Acc) ->
-                            dict:store(Id, LST, Acc)
-                          end, VV_LST, dict:to_list(Siblings)),
-    GST = lists:foldl(fun({_Partition, LST}, Acc0) ->
+    LocalGST = lists:foldl(fun({_Partition, LST}, Acc0) ->
+                            lists:foldl(fun({Id, Clock}, Acc1) ->
+                                            dict:store(Id, min(dict:fetch(Id, Acc1), Clock), Acc1)
+                                        end, Acc0, dict:to_list(LST))
+                            end, GST0, dict:to_list(VV_LST)),
+    GST = lists:foldl(fun({_Node, LST}, Acc0) ->
                         lists:foldl(fun({Id, Clock}, Acc1) ->
                                         dict:store(Id, min(dict:fetch(Id, Acc1), Clock), Acc1)
                                     end, Acc0, dict:to_list(LST))
-                      end, GST0, dict:to_list(VV_LST1)),
+                      end, LocalGST, dict:to_list(Siblings)),
     MyNode = node(),
     lists:foreach(fun(Partition) ->
                     saturn_proxy_vnode:new_gst({Partition, MyNode}, GST)
                   end, dict:fetch_keys(VV_LST)),
+    lists:foreach(fun(Node) ->
+                    saturn_client_receiver:new_lst(Node, MyNode, LocalGST)
+                  end, dict:fetch_keys(Siblings)),
     erlang:send_after(?TIMES_FREQ, self(), compute_clocks),
     {noreply, S0};
 
