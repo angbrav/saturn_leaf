@@ -46,7 +46,8 @@ add_update(Data, Sender, TimeStamp) ->
             %        noop
             %end,
             %{IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
-            %lager:info("Update timestamp: ~p", [dict:to_list(TimeStamp)]),
+            {GST, _} = Stable,
+            lager:info("Update timestamp: ~p, current GST: ~p", [dict:to_list(TimeStamp), dict:to_list(GST)]),
             {IdUp, Updates, IdRem, Remotes, [{TimeStamp, dict:fetch(Sender, TimeStamp), Sender}|Pending], Stable};
         _ ->
             {IdUp, Updates, IdRem, Remotes, Pending, Stable}
@@ -87,6 +88,7 @@ process_pending([Next|Rest]=List, ClockGST, GST, When, Updates, IdUp, NewPending
             {IdUp1, NewPending1}=lists:foldl(fun({ElemTS, ElemTime, ElemSender}=Elem, {IdUp0, Pending}) ->
                                                 case is_stable(dict:to_list(GST), ElemTS)  of
                                                     true ->
+                
                                                         ets:insert(Updates, {IdUp0, {ElemSender, When - ElemTime}}),
                                                         {IdUp0+1, Pending};
                                                     false ->
