@@ -33,20 +33,21 @@ clean(Data, Name) ->
     {0, Updates, 0, Remotes, [], {dict:new(),0}}.
 
 add_update(Data, Sender, TimeStamp) ->
-    %Dif = saturn_utilities:now_microsec() - TimeStamp,
+    Clock = dict:fetch(Sender, TimeStamp),
+    Dif = saturn_utilities:now_microsec() - Clock,
     {IdUp, Updates, IdRem, Remotes, Pending, Stable} = Data,
     case Sender of
         ?SENDER_STALENESS ->
-            %ets:insert(Updates, {IdUp, {Sender, Dif}}),
-            %case IdUp rem 1000 of
-            %    0 ->
-            %        lager:info("Remote update dif: ~p" ,[Dif]);
-            %    _ ->
-            %        noop
-            %end,
-            %{IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
+            ets:insert(Updates, {IdUp, {Sender, Dif}}),
+            case IdUp rem 1000 of
+                0 ->
+                    lager:info("Remote update dif: ~p" ,[Dif]);
+                _ ->
+                    noop
+            end,
+            {IdUp+1, Updates, IdRem, Remotes, Pending, Stable};
             %lager:info("Update timestamp: ~p", [dict:to_list(TimeStamp)]),
-            {IdUp, Updates, IdRem, Remotes, [{TimeStamp, dict:fetch(Sender, TimeStamp), Sender}|Pending], Stable};
+            %{IdUp, Updates, IdRem, Remotes, [{TimeStamp, dict:fetch(Sender, TimeStamp), Sender}|Pending], Stable};
         _ ->
             {IdUp, Updates, IdRem, Remotes, Pending, Stable}
     end.
