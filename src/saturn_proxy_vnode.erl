@@ -309,8 +309,8 @@ handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
 handle_command({propagate, BKey, Value, TimeStamp, Sender}, _From, S0=#state{connector=Connector0, gst=GST, vv=VV0, pops=Pendings, receivers=Receivers, staleness=Staleness}) ->
-    %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, TimeStamp, Sender]),
-    %lager:info("GST: ~p, Timestamp: ~p", [GST, TimeStamp]),
+    %lager:info("Received a remote update. Key ~p, Value ~p, TS ~p, Sender ~p",[BKey, Value, dict:to_list(TimeStamp), Sender]),
+    lager:info("GST: ~p, Timestamp: ~p", [dict:to_list(GST), dict:to_list(TimeStamp)]),
     VV1 = dict:store(Sender, TimeStamp, VV0),
     case is_stable(dict:to_list(GST), TimeStamp) of
         true ->
