@@ -45,8 +45,8 @@ data(Node, Label, BKey, Value) ->
 remote_read(Node, Label) ->
     gen_server:cast(Node, {remote_read, Label}).
 
-propagate(Node, BKey, Clock, Node, Sender) ->
-    gen_server:cast(Node, {propagate, BKey, Clock, Node, Sender}).
+propagate(Receiver, BKey, Clock, Node, Sender) ->
+    gen_server:cast(Receiver, {propagate, BKey, Clock, Node, Sender}).
 
 init([]) ->
     {ok, nostate}.
