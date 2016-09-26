@@ -63,7 +63,7 @@ init([MyId]) ->
 handle_call(clean_state, _From, S0=#state{labels_queue=Labels}) ->
     {reply, ok, S0#state{labels_queue=ets_queue:clean(Labels)}};
 
-handle_call({set_data_receivers, Receivers}, _From, S0) ->
+handle_call({set_data_receivers, [Receivers]}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}}.
 
 handle_cast(completed, S0=#state{labels_queue=Labels0, receivers=Receivers}) ->
