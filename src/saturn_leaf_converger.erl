@@ -55,6 +55,7 @@ set_data_receivers(MyId, Receivers) ->
     gen_server:call({global, reg_name(MyId)}, {set_data_receivers, Receivers}, infinity).
 
 init([MyId]) ->
+    lager:info("Init converger with name: ~p", [reg_name(MyId)]),
     Name = list_to_atom(integer_to_list(MyId) ++ "converger_queue"),
     {ok, #state{labels_queue=ets_queue:new(Name),
                 myid=MyId}}.
