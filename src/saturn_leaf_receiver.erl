@@ -55,7 +55,7 @@ init([MyId]) ->
     Convergers = [{saturn_data_receiver, Node} || Node <- Nodes],
     {ok, #state{myid=MyId, nodes=Convergers}}.
 
-handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
+handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId, nodes=Nodes}) ->
     Group0 = lists:seq(0, NLeaves-1),
     Group1 = lists:delete(MyId, Group0),
     Convergers1 = lists:foldl(fun(Id, Acc) ->
@@ -73,6 +73,7 @@ handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
                                 ok = saturn_proxy_vnode:set_receivers(hd(PrefList), D),
                                 {dict:store(hd(PrefList), D, Acc), N+1}
                             end, {dict:new(), 1}, GrossPrefLists),
+    ok = saturn_proxy_converger:set_data_receivers(MyId, Nodes),
     {reply, ok, S0#state{scattered_receivers=Dict}};
 
 handle_call(get_receivers, _From, S0=#state{nodes=Nodes}) ->

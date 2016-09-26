@@ -31,7 +31,9 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
--export([data/4]).
+-export([data/4,
+         remote_read/2,
+         propagate/5]).
 
                
 start_link() ->
@@ -39,6 +41,12 @@ start_link() ->
 
 data(Node, Label, BKey, Value) ->
     gen_server:cast(Node, {data, Label, BKey, Value}).
+
+remote_read(Node, Label) ->
+    gen_server:cast(Node, {remote_read, Label}).
+
+propagate(Node, BKey, Clock, Node, Sender) ->
+    gen_server:cast(Node, {propagate, BKey, Clock, Node, Sender}).
 
 init([]) ->
     {ok, nostate}.
@@ -52,6 +60,21 @@ handle_cast({data, Label, BKey, Value}, S0) ->
     PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
     [{IndexNode, _Type}] = PrefList,
     saturn_proxy_vnode:data(IndexNode, Label, BKey, Value),
+    {noreply, S0};
+
+handle_cast({remote_read, Label}, S0) ->
+    BKey = Label#label.bkey,
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:remote_read(IndexNode, Label),
+    {noreply, S0};
+
+handle_cast({propagate, BKey, Clock, Node, Sender}, S0) ->
+    DocIdx = riak_core_util:chash_key(BKey),
+    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+    [{IndexNode, _Type}] = PrefList,
+    saturn_proxy_vnode:propagate(IndexNode, Clock, Node, Sender),
     {noreply, S0};
 
 handle_cast(_Info, State) ->
