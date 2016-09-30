@@ -58,4 +58,4 @@
 -define(STALENESS, stats_cdf_cure_handler_mock).
 -define(PERCENTILES, 20).
 -define(VERSION_THOLD, 10).
--define(SENDER_STALENESS, 3).
+-define(SENDER_STALENESS, 2).
