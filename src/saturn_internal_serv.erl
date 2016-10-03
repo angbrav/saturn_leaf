@@ -65,6 +65,7 @@ init([MyId]) ->
     Tree = Manager#state_manager.tree,
     {ok, Delays0} = groups_manager:get_delays_internal(Tree, MyId),
     Delays1 = lists:foldl(fun({Node, Delay}, Dict) ->
+                            lager:info("Delay node: ~p is ~p", [Node, Delay]),
                             dict:store(Node, Delay*1000, Dict)
                           end, dict:new(), dict:to_list(Delays0)),
     {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager}}.
@@ -138,6 +139,11 @@ handle_call(restart, _From, S0=#state{busy=Busy0, queues=Queues0}) ->
     {reply, ok, S0#state{queues=Queues1, busy=Busy1}};
 
 handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=MyId, queues=Queues}) ->
+    {ok, Delays0} = groups_manager:get_delays_internal(Tree, MyId),
+    Delays1 = lists:foldl(fun({Node, Delay}, Dict) ->
+                            lager:info("Delay node: ~p is ~p", [Node, Delay]),
+                            dict:store(Node, Delay*1000, Dict)
+                          end, dict:new(), dict:to_list(Delays0)),
     Paths = groups_manager:path_from_tree_dict(Tree, Leaves),
     lager:info("Paths: ~p", [dict:to_list(Paths)]),
     {ok, Nodes} = groups_manager:get_mypath(MyId, Paths),
@@ -149,7 +155,7 @@ handle_call({set_tree, Tree, Leaves}, _From, S0=#state{manager=Manager0, myid=My
                                     {dict:store(Node, ets_queue:new(Name), Queues0), dict:store(Node, false, Busy0)}
                                  end, {dict:new(), dict:new()}, Nodes),
     Manager1 = Manager0#state_manager{paths=Paths, tree=Tree, nleaves=Leaves},
-    {reply, ok, S0#state{manager=Manager1, queues=Queues1, busy=Busy}};
+    {reply, ok, S0#state{manager=Manager1, queues=Queues1, busy=Busy, delays=Delays1}};
 
 handle_call({set_groups, RGroups}, _From, S0=#state{manager=Manager}) ->
     Table = Manager#state_manager.groups,
