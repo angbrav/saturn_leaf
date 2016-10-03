@@ -28,8 +28,11 @@
 init_state(Id) ->
     Name = Id ++ "groups",
     Groups = ets:new(list_to_atom(Name), [set, named_table, private]),
-    ok = groups_manager:new_groupsfile(?GROUPSFILE, Groups),
-    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(?TREEFILE),
+    {ok, GroupsFile} = application:get_env(saturn_leaf, groups),
+    {ok, TreeFile} = application:get_env(saturn_leaf, tree),
+    lager:info("Groupsfile: ~p", [GroupsFile]),
+    ok = groups_manager:new_groupsfile(GroupsFile, Groups),
+    {ok, Paths, Tree, NLeaves} = groups_manager:new_treefile(TreeFile),
     #state_manager{tree=Tree,
                    paths=Paths,
                    nleaves=NLeaves,
