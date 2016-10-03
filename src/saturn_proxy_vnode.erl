@@ -585,7 +585,7 @@ is_stable([{DC, Clock}|T], TimeStamp) ->
         {ok, Clock2} when (Clock>=Clock2) ->
             is_stable(T, TimeStamp);
         error ->
-            lager:error("Never here I guess: ~p", [dict:to_list(TimeStamp)]),
+            %lager:error("Never here I guess: ~p", [dict:to_list(TimeStamp)]),
             is_stable(T, TimeStamp);
         _ ->
             false
