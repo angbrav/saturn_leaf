@@ -55,7 +55,7 @@
 
 %HOW TO TRACK REMOTE UPDATE VISBILITY LATENCIES
 %-define(STALENESS, mock_stats_handler).
--define(STALENESS, stats_cdf_cure_handler_mock).
+-define(STALENESS, stats_cdf_cure_handler).
 -define(PERCENTILES, 20).
 -define(VERSION_THOLD, 10).
 -define(SENDER_STALENESS, 2).
