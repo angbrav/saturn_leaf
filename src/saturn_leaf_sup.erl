@@ -25,7 +25,7 @@
 -include("saturn_leaf.hrl").
 %% API
 -export([start_link/0,
-         start_leaf/2,
+         start_leaf/3,
          start_internal/2]).
 
 %% Supervisor callbacks
@@ -38,7 +38,7 @@
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-start_leaf(Port, MyId) ->
+start_leaf(Port, MyId, NLeaves) ->
 
     {ok, List} = inet:getif(),
     {Ip, _, _} = hd(List),
@@ -50,11 +50,11 @@ start_leaf(Port, MyId) ->
                     permanent, 5000, worker, [saturn_leaf_receiver]}),
 
     supervisor:start_child(?MODULE, {saturn_leaf_converger,
-                    {saturn_leaf_converger, start_link, [MyId]},
+                    {saturn_leaf_converger, start_link, [MyId, NLeaves]},
                     permanent, 5000, worker, [saturn_leaf_converger]}),
     
     supervisor:start_child(?MODULE, {saturn_leaf_producer,
-                    {saturn_leaf_producer, start_link, [MyId]},
+                    {saturn_leaf_producer, start_link, [MyId, NLeaves]},
                     permanent, 5000, worker, [saturn_leaf_producer]}),
 
     {ok, {Host, Port}}.

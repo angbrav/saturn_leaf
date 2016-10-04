@@ -26,6 +26,7 @@
 -define(MYIDKEY, myid_key).
 
 -define(HEARTBEAT_FREQ, 2).
+-define(INTER_HEARTBEAT_FREQ, 5).
 -define(STABILIZATION_FREQ, 1).
 
 %-define(PROPAGATION_MODE, naive_erlang).
