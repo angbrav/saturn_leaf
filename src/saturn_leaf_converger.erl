@@ -72,7 +72,7 @@ init([MyId, NLeaves]) ->
 
 handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
     true = ets:delete(Labels0),
-    Labels1 = ets:new(labels_producer, [ordered_set, named_table, private]),
+    Labels1 = ets:new(labels_converger, [ordered_set, named_table, private]),
     VClock1 = lists:foldl(fun(Id, Acc) ->
                             dict:store(Id, 0, Acc)
                           end, dict:new(), dict:fetch_keys(VClock0)),
