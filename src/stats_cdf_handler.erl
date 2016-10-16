@@ -52,10 +52,10 @@ compute_average(Data) ->
 compute_raw(Data, From, Type) ->
     case Type of
         updates ->
-            {IdUp, Updates, _IdRem, _Remotes} = Data,
+            {IdUp, Updates, _IdRem, _Remotes, _} = Data,
             get_ordered(From, Updates, IdUp);
         remotes ->
-            {_IdUp, _Updates, IdRem, Remotes} = Data,
+            {_IdUp, _Updates, IdRem, Remotes, _} = Data,
             get_ordered(From, Remotes, IdRem)
     end.
 
@@ -71,10 +71,10 @@ compute_cdf_from_orddict(List) ->
 compute_cdf(Data, From, Type) ->
     case Type of
         updates ->
-            {IdUp, Updates, _IdRem, _Remotes} = Data,
+            {IdUp, Updates, _IdRem, _Remotes, _} = Data,
             List = get_ordered(From, Updates, IdUp);
         remotes ->
-            {_IdUp, _Updates, IdRem, Remotes} = Data,
+            {_IdUp, _Updates, IdRem, Remotes, _} = Data,
             List = get_ordered(From, Remotes, IdRem)
     end,
     ListSteps = get_liststeps(List),
