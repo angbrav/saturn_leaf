@@ -64,7 +64,7 @@ staleness_average() ->
                                 {ok, {Sum1, Total1}} = saturn_proxy_vnode:collect_staleness(hd(PrefList)),
                                 {Sum0+Sum1, Total0+Total1}
                                end, {0, 0}, GrossPrefLists0),
-    {ok, Sum/Total}.
+    {ok, {Sum, Total}}.
 
 collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
