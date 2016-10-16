@@ -59,6 +59,7 @@
          set_groups/2,
          set_myid/2,
          collect_stats/3,
+         collect_staleness/1,
          clean_state/1,
          check_ready/1]).
 
@@ -177,6 +178,11 @@ collect_stats(Node, From, Type) ->
                                         {collect_stats, From, Type},
                                         ?PROXY_MASTER).
 
+collect_staleness(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        collect_staleness,
+                                        ?PROXY_MASTER).
+
 init_prop_fsms(_Vnode, ReadQueue0, WriteQueue0, 0) ->
     {ok, ReadQueue0, WriteQueue0};
 
@@ -246,6 +252,9 @@ handle_command({set_groups, Groups}, _From, S0=#state{manager=Manager}) ->
 
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};
+
+handle_command(collect_staleness, _Sender, S0=#state{staleness=Staleness}) ->
+    {reply, {ok, ?STALENESS:compute_average(Staleness)}, S0};
 
 handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=Partition, staleness=Staleness, pending_readtxs=PendingReadTxs, pending_writetxs=PendingWriteTxs}) ->
     Connector1 = ?BACKEND_CONNECTOR:clean(Connector0, Partition),
