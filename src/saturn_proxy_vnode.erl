@@ -57,6 +57,7 @@
          set_receivers/2,
          data/4,
          collect_stats/3,
+         collect_staleness/1,
          check_ready/1]).
 
 -record(state, {partition,
@@ -159,6 +160,11 @@ collect_stats(Node, From, Type) ->
                                         {collect_stats, From, Type},
                                         ?PROXY_MASTER).
 
+collect_staleness(Node) ->
+    riak_core_vnode_master:sync_command(Node,
+                                        collect_staleness,
+                                        ?PROXY_MASTER).
+
 init([Partition]) ->
     Manager = groups_manager:init_state(integer_to_list(Partition)),
     Connector = ?BACKEND_CONNECTOR:connect([Partition]),
@@ -202,6 +208,9 @@ check_ready_partition([{Partition, Node} | Rest], Function) ->
 
 handle_command({check_tables_ready}, _Sender, SD0) ->
     {reply, true, SD0};
+
+handle_command(collect_staleness, _Sender, S0=#state{staleness=Staleness}) ->
+    {reply, {ok, ?STALENESS:compute_average(Staleness)}, S0};
 
 handle_command({collect_stats, From, Type}, _Sender, S0=#state{staleness=Staleness}) ->
     {reply, {ok, ?STALENESS:compute_raw(Staleness, From, Type)}, S0};

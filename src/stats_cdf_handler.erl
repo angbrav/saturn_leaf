@@ -10,6 +10,7 @@
          add_remote/3,
          add_update/3,
          compute_raw/3,
+         compute_average/1,
          merge_raw/2,
          compute_cdf/3,
          compute_cdf_from_orddict/1,
@@ -20,37 +21,41 @@ init(Name) ->
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes}.
+    {0, Updates, 0, Remotes, 0}.
 
 clean(Data, Name) ->
-    {_IdUp, Updates, _IdRem, Remotes} = Data,
+    {_IdUp, Updates, _IdRem, Remotes, _Sum} = Data,
     true = ets:delete(Updates),
     true = ets:delete(Remotes),
     NUpdates = list_to_atom(atom_to_list(Name) ++ "_updates"),
     NRemotes = list_to_atom(atom_to_list(Name) ++ "_remotes"),
     Updates = ets:new(NUpdates, [set, named_table, private]),
     Remotes = ets:new(NRemotes, [set, named_table, private]),
-    {0, Updates, 0, Remotes}.
+    {0, Updates, 0, Remotes, 0}.
 
 add_remote(Data, Sender, TimeStamp) ->
     Dif = saturn_utilities:now_microsec() - TimeStamp,
-    {IdUp, Updates, IdRem, Remotes} = Data,
+    {IdUp, Updates, IdRem, Remotes, Sum} = Data,
     true = ets:insert(Remotes, {IdRem, {Sender, Dif}}),
-    {IdUp, Updates, IdRem+1, Remotes}.
+    {IdUp, Updates, IdRem+1, Remotes, Sum}.
 
 add_update(Data, Sender, TimeStamp) ->
     Dif = saturn_utilities:now_microsec() - TimeStamp,
-    {IdUp, Updates, IdRem, Remotes} = Data,
+    {IdUp, Updates, IdRem, Remotes, Sum} = Data,
     true = ets:insert(Updates, {IdUp, {Sender, Dif}}),
-    {IdUp+1, Updates, IdRem, Remotes}.
+    {IdUp+1, Updates, IdRem, Remotes, Sum + Dif}.
+
+compute_average(Data) ->
+    {IdUp, _Updates, _IdRem, _Remotes, Sum} = Data,
+    {Sum, IdUp}.
 
 compute_raw(Data, From, Type) ->
     case Type of
         updates ->
-            {IdUp, Updates, _IdRem, _Remotes} = Data,
+            {IdUp, Updates, _IdRem, _Remotes, _} = Data,
             get_ordered(From, Updates, IdUp);
         remotes ->
-            {_IdUp, _Updates, IdRem, Remotes} = Data,
+            {_IdUp, _Updates, IdRem, Remotes, _} = Data,
             get_ordered(From, Remotes, IdRem)
     end.
 
@@ -66,10 +71,10 @@ compute_cdf_from_orddict(List) ->
 compute_cdf(Data, From, Type) ->
     case Type of
         updates ->
-            {IdUp, Updates, _IdRem, _Remotes} = Data,
+            {IdUp, Updates, _IdRem, _Remotes, _} = Data,
             List = get_ordered(From, Updates, IdUp);
         remotes ->
-            {_IdUp, _Updates, IdRem, Remotes} = Data,
+            {_IdUp, _Updates, IdRem, Remotes, _} = Data,
             List = get_ordered(From, Remotes, IdRem)
     end,
     ListSteps = get_liststeps(List),

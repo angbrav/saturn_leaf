@@ -10,6 +10,7 @@
          async_update/4,
          clean/1,
          collect_stats/2,
+         staleness_average/0,
          spawn_wrapper/4
         ]).
 
@@ -55,6 +56,15 @@ clean(MyId) ->
                     ok = saturn_proxy_vnode:clean_state(hd(PrefList))
                   end, GrossPrefLists),
     ok.
+
+staleness_average() ->
+    {ok, Ring} = riak_core_ring_manager:get_my_ring(),
+    GrossPrefLists0 = riak_core_ring:all_preflists(Ring, 1),
+    {Sum, Total} = lists:foldl(fun(PrefList, {Sum0, Total0}) ->
+                                {ok, {Sum1, Total1}} = saturn_proxy_vnode:collect_staleness(hd(PrefList)),
+                                {Sum0+Sum1, Total0+Total1}
+                               end, {0, 0}, GrossPrefLists0),
+    {ok, {Sum, Total}}.
 
 collect_stats(From, Type) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
