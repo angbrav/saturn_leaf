@@ -90,14 +90,19 @@ handle_cast({remote_reply, Sender, BKey, Value, Client, Clock, Type}, S0) ->
     {noreply, S0};
 
 handle_cast({heartbeat, Partition, Clock, Sender}, S0=#state{zeropl=ZeroPreflist}) ->
-    case Partition of
-        0 ->
-            IndexNode = ZeroPreflist;
+    case ZeroPreflist of
+        not_init ->
+            noop;
         _ ->
-            PrefList = riak_core_apl:get_primary_apl(Partition - 1, 1, ?PROXY_SERVICE),
-            [{IndexNode, _Type}] = PrefList
+            case Partition of
+                0 ->
+                    IndexNode = ZeroPreflist;
+                _ ->
+                    PrefList = riak_core_apl:get_primary_apl(Partition - 1, 1, ?PROXY_SERVICE),
+                    [{IndexNode, _Type}] = PrefList
+            end,
+            saturn_proxy_vnode:heartbeat(IndexNode, Clock, Sender)
     end,
-    saturn_proxy_vnode:heartbeat(IndexNode, Clock, Sender),
     {noreply, S0};
 
 handle_cast(_Info, State) ->
