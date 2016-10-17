@@ -58,6 +58,7 @@ set_zeropl(Name, ZeroPreflist) ->
     gen_server:call(Name, {set_zeropl, ZeroPreflist}, infinity).
 
 init([]) ->
+    lager:info("Init converger at node ~p", [node()]),
     {ok, #state{zeropl=not_init}}.
 
 handle_call({set_zeropl, ZeroPreflist}, _From, S0) ->
