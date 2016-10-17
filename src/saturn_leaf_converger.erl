@@ -58,7 +58,7 @@ set_zeropl(Name, ZeroPreflist) ->
     gen_server:call(Name, {set_zeropl, ZeroPreflist}, infinity).
 
 init([]) ->
-    {ok, #state{zeropl=not_found}}.
+    {ok, #state{zeropl=not_init}}.
 
 handle_call({set_zeropl, ZeroPreflist}, _From, S0) ->
     {reply, ok, S0#state{zeropl=ZeroPreflist}};

@@ -78,6 +78,7 @@ init([MyId]) ->
             lager:error("Zero preflist not found", []);
         _ ->
             lists:foreach(fun(Name) ->
+                            lager:info("Sending zeropl ~p to ~p", [ZeroPreflist, Name]),
                             ok = saturn_leaf_converger:set_zeropl(Name, ZeroPreflist)
                           end, Convergers)
     end,
