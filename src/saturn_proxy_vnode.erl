@@ -388,6 +388,10 @@ handle_command({remote_read, Label}, _From, S0=#state{connector=Connector, stale
     end,
     {noreply, S0#state{staleness=Staleness1}};
 
+handle_command({pending_send, Receiver, Label, Value}, _From, S0) ->
+    saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value}),
+    {noreply, S0};
+
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
     {noreply, State}.
@@ -468,7 +472,13 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
         {ok, Group} ->
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
-                            saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
+                            {From, To, Delay} = ?FROM_TO_DELAY,
+                            case ((From == MyId) and (To == Receiver)) or ((From == Receiver) and (To == MyId)) of
+                                true ->
+                                    riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value});
+                                false ->
+                                    saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
+                            end    
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])

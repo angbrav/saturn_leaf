@@ -59,3 +59,4 @@
 -define(PERCENTILES, 20).
 
 -define(N_FSMS, 5).
+-define(FROM_TO_DELAY, {2, 3, 7}).
