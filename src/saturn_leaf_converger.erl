@@ -38,12 +38,11 @@
                
 
 start_link() ->
-    Name = list_to_atom(atom_to_list(node()) ++ atom_to_list(?MODULE)),
-    gen_server:start({global, Name}, ?MODULE, [], []).
+    gen_server:start({local, ?MODULE}, ?MODULE, [], []).
 
 handle(Name, Message) ->
     %lager:info("Message received: ~p", [Message]),
-    gen_server:cast({global, Name}, Message).
+    gen_server:cast(Name, Message).
 
 init([]) ->
     {ok, #state{labels_queue=queue:new(),
