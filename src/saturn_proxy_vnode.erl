@@ -471,7 +471,6 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
     Label = create_label(update, BKey, saturn_utilities:now_microsec(), {Partition, node()}, MyId, {}),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
-                            lager:info("Sending bucket:~p to ~p", [BKey, Group]),
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
                             %{From, To, Delay} = ?FROM_TO_DELAY,
