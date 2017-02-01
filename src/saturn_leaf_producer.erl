@@ -203,6 +203,7 @@ propagate_stream(FinalStream, MyId, Manager) ->
                 true ->
                     case Delay == 0 of
                         true ->
+                            lager:info("Sending: ~p to ~p from ~p", [Stream, Id, MyId]),
                             saturn_internal_serv:handle(Id, {new_stream, Stream, MyId});
                         false ->
                             erlang:send_after(Delay, self(), {pending_send, Id, Stream, MyId})

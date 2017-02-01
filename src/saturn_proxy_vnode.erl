@@ -289,6 +289,7 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     {noreply, S1};
 
 handle_command({propagate, TimeStamp, Node, Sender}, _From, S0=#state{connector=Connector0, myid=MyId, data=Data, staleness=Staleness0}) ->
+    lager:info("Remote operation metadata"),
     Id = {TimeStamp, Node},
     case ets:lookup(Data, Id) of
         [] ->
