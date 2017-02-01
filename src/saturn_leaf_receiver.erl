@@ -60,7 +60,7 @@ set_groups(MyId, Groups) ->
 init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Nodes = riak_core_ring:all_members(Ring),
-    Convergers = [list_to_atom(atom_to_list(Node) ++ atom_to_list(saturn_leaf_converger)) || Node <- Nodes],
+    Convergers = [{saturn_leaf_converger, Node} || Node <- Nodes],
     {ok, #state{myid=MyId, nodes=Convergers}}.
 
 handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
