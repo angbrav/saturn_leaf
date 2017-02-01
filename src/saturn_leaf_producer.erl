@@ -146,6 +146,10 @@ handle_info(deliver, S0=#state{myid=MyId, labels=Labels, vclock=VClock0, manager
     erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
     {noreply, S0};
 
+handle_info({pending_send, Id, Stream, MyId}, S0) ->
+    saturn_internal_serv:handle(Id, {new_stream, Stream, MyId}),
+    {noreply, S0};
+
 handle_info(Info, State) ->
     lager:info("Weird message: ~p", [Info]),
     {noreply, State}.
@@ -194,7 +198,18 @@ propagate_stream(FinalStream, MyId, Manager) ->
         {ok, _, no_indexnode} ->
             noop;
         {ok, Stream, Id} ->
-            saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
+            {From, To, Delay} = ?FROM_TO_DELAY,
+            case ((From == MyId) and lists:member(Id, To)) or ((From == Id) and lists:member(MyId, To)) of
+                true ->
+                    case Delay == 0 of
+                        true ->
+                            saturn_internal_serv:handle(Id, {new_stream, Stream, MyId});
+                        false ->
+                            erlang:send_after(Delay, self(), {pending_send, Id, Stream, MyId})
+                    end;
+                false ->
+                    saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
+            end
     end.
 
 -ifdef(TEST).

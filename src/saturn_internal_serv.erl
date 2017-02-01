@@ -166,6 +166,15 @@ handle_info({deliver_labels, Node}, S0=#state{queues=Queues0, busy=Busy0, myid=M
     Busy1 = dict:store(Node, NewPending, Busy0),
     {noreply, S0#state{queues=Queues1, busy=Busy1}};
 
+handle_info({pending_send, Node, Stream, MyId, NLeaves}, S0) ->
+    case groups_manager:is_leaf(Node, NLeaves) of
+        true ->
+            saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
+        false ->
+            saturn_internal_serv:handle(Node, {new_stream, Stream, MyId})
+    end,
+    {noreply, S0};
+
 handle_info(Info, State) ->
     lager:info("Weird message: ~p", [Info]),
     {noreply, State}.
@@ -200,9 +209,25 @@ propagate_stream(_Node, [], _MyId, _NLeaves) ->
 
 propagate_stream(Node, Stream, MyId, NLeaves) ->
     %lager:info("Stream to propagate to ~p: ~p", [Node, Stream]),
-    case groups_manager:is_leaf(Node, NLeaves) of
+    {From, To, Delay} = ?FROM_TO_DELAY,
+    case ((From == MyId) and lists:member(Node, To)) or ((From == Node) and lists:member(MyId, To)) of
         true ->
-            saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
+            case Delay == 0 of
+                true ->
+                    case groups_manager:is_leaf(Node, NLeaves) of
+                        true ->
+                            saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
+                        false ->
+                            saturn_internal_serv:handle(Node, {new_stream, Stream, MyId})
+                    end;
+                false ->
+                    erlang:send_after(Delay, self(), {pending_send, Node, Stream, MyId, NLeaves})
+            end;
         false ->
-            saturn_internal_serv:handle(Node, {new_stream, Stream, MyId})
+            case groups_manager:is_leaf(Node, NLeaves) of
+                true ->
+                    saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
+                false ->
+                    saturn_internal_serv:handle(Node, {new_stream, Stream, MyId})
+            end
     end.
