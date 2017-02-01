@@ -210,7 +210,7 @@ propagate_stream(_Node, [], _MyId, _NLeaves) ->
 propagate_stream(Node, Stream, MyId, NLeaves) ->
     %lager:info("Stream to propagate to ~p: ~p", [Node, Stream]),
     {From, To, Delay} = ?FROM_TO_DELAY,
-    case ((From == MyId) and lists:member(Node, To)) or ((From == Node) and lists:member(MyId, To)) of
+    case (lists:member(MyId, From) and lists:member(Node, To)) or (lists:member(Node, From) and lists:member(MyId, To)) of
         true ->
             case Delay == 0 of
                 true ->

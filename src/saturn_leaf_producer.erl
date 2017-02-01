@@ -199,7 +199,7 @@ propagate_stream(FinalStream, MyId, Manager) ->
             noop;
         {ok, Stream, Id} ->
             {From, To, Delay} = ?FROM_TO_DELAY,
-            case ((From == MyId) and lists:member(Id, To)) or ((From == Id) and lists:member(MyId, To)) of
+            case (lists:member(MyId, From) and lists:member(Id, To)) or (lists:member(Id, From) and lists:member(MyId, To)) of
                 true ->
                     case Delay == 0 of
                         true ->
