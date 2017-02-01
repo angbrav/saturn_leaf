@@ -479,6 +479,7 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
                                         true ->
                                             saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value});
                                         false ->
+                                            lager:info("Delaying for ~p", [Delay]),
                                             riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value})
                                     end;
                                 false ->
