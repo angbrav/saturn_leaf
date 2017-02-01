@@ -473,13 +473,13 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
         {ok, Group} ->
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
-                            {From, To, Delay} = ?FROM_TO_DELAY,
-                            case ((From == MyId) and (To == Receiver)) or ((From == Receiver) and (To == MyId)) of
-                                true ->
-                                    riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value});
-                                false ->
+                            %{From, To, Delay} = ?FROM_TO_DELAY,
+                            %case ((From == MyId) and (To == Receiver)) or ((From == Receiver) and (To == MyId)) of
+                            %    true ->
+                            %        riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value});
+                            %    false ->
                                     saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
-                            end    
+                            %end    
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
