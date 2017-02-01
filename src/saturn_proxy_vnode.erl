@@ -478,7 +478,6 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
                             %    true ->
                             %        riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value});
                             %    false ->
-                                    lager:info("Sending to: ~p", [Receiver]),
                                     saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value})
                             %end    
                           end, Group);

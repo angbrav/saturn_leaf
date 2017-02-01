@@ -49,7 +49,7 @@ init([]) ->
                 ops_dict=dict:new()}}.
 
 handle_cast({new_operation, Label, Value}, S0) ->
-    lager:info("New operation received. Label: ~p", [Label]),
+    %lager:info("New operation received. Label: ~p", [Label]),
     ok = execute_operation(Label, Value),
     {noreply, S0};
 
