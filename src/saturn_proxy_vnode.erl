@@ -361,7 +361,7 @@ handle_command({set_receivers, Receivers}, _From, S0) ->
     {reply, ok, S0#state{receivers=Receivers}};
 
 handle_command({propagate, BKey, Value, {TimeStamp, Sender}}, _From, S0=#state{connector=Connector0, staleness=Staleness}) ->
-    lager:info(new_propagation),
+    lager:info("new_propagation"),
     Staleness1 = ?STALENESS:add_update(Staleness, Sender, TimeStamp),
     {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, 0}),
     {noreply, S0#state{connector=Connector1, staleness=Staleness1}};
