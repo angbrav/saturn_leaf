@@ -473,13 +473,14 @@ do_update(BKey, Value, S0=#state{partition=Partition, myid=MyId, connector=Conne
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
                             {From, To, Delay} = ?FROM_TO_DELAY,
+                            lager:info("From: ~p, To: ~p, MyId: ~p, Receiver: ~p", [From, To, MyId, Receiver]),
                             case ((From == MyId) and (To == Receiver)) or ((From == Receiver) and (To == MyId)) of
                                 true ->
+                                    lager:info("Delaying for ~p", [Delay]),
                                     case Delay == 0 of
                                         true ->
                                             saturn_leaf_converger:handle(Receiver, {new_operation, Label, Value});
                                         false ->
-                                            lager:info("Delaying for ~p", [Delay]),
                                             riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, Label, Value})
                                     end;
                                 false ->
