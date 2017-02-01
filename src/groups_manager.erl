@@ -85,13 +85,14 @@ get_delays_internal(Tree, MyId) ->
                                         {Dict, C+1}
                                 end
                               end, {dict:new(), 0}, Row),
-    case dict:size(Delays) > 3 of
-        true ->
-            lager:error("Tree is not binary: ~p: ~p", [MyId, Row]),
-            {error, no_binary_tree};
-        false ->
-            {ok, Delays}
-    end.
+    %case dict:size(Delays) > 3 of
+    %    true ->
+    %        lager:error("Tree is not binary: ~p: ~p", [MyId, Row]),
+    %        {error, no_binary_tree};
+    %    false ->
+    %        {ok, Delays}
+    %end.
+    {ok, Delays}.
 
 new_groupsfile(File, Table) ->
     {ok, GroupsFile} = file:open(File, [read]),
