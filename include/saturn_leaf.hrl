@@ -60,3 +60,4 @@
 %-define(STALENESS, mock_stats_handler).
 -define(STALENESS, stats_cdf_handler).
 -define(PERCENTILES, 20).
+-define(FROM_TO_DELAY, {2, 3, 7}).

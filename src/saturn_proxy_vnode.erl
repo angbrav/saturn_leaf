@@ -328,6 +328,10 @@ handle_command(heartbeat, _From, S0=#state{partition=Partition, max_ts=MaxTS0, m
 handle_command(last_label, _Sender, S0=#state{last_label=LastLabel}) ->
     {reply, {ok, LastLabel}, S0};
 
+handle_command({pending_send, Receiver, UId, BKey, Value}, _From, S0) ->
+    saturn_data_receiver:data(Receiver, UId, BKey, Value),
+    {noreply, S0};
+
 handle_command(Message, _Sender, State) ->
     ?PRINT({unhandled_command, Message}),
     {noreply, State}.
@@ -412,7 +416,18 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
                             UId = {TimeStamp, {Partition, node()}},
-                            saturn_data_receiver:data(Receiver, UId, BKey, Value)
+                            {From, To, Delay} = ?FROM_TO_DELAY,
+                            case (lists:member(MyId, From) and lists:member(Id, To)) or (lists:member(Id, From) and lists:member(MyId, To)) of
+                                true ->
+                                    case Delay == 0 of
+                                        true ->
+                                            saturn_data_receiver:data(Receiver, UId, BKey, Value);
+                                        false ->
+                                            riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, UId, BKey, Value})
+                                    end;
+                                false ->
+                                    saturn_data_receiver:data(Receiver, UId, BKey, Value)
+                            end
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
