@@ -417,7 +417,7 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
                             Receiver = dict:fetch(Id, Receivers),
                             UId = {TimeStamp, {Partition, node()}},
                             {From, To, Delay} = ?FROM_TO_DELAY,
-                            case (lists:member(MyId, From) and lists:member(Id, To)) or (lists:member(Id, From) and lists:member(MyId, To)) of
+                            case ((From == MyId) and (To == Id)) or ((From == Id) and (To == MyId)) of
                                 true ->
                                     case Delay == 0 of
                                         true ->
