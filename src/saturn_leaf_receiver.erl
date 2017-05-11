@@ -41,7 +41,8 @@
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
 
 start_link(MyId) ->
-    gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
+  lager:info("StartLink global: ~p\n",[reg_name(MyId)]),
+  gen_server:start({global, reg_name(MyId)}, ?MODULE, [MyId], []).
 
 get_receivers(MyId) ->
     gen_server:call({global, reg_name(MyId)}, get_receivers, infinity).
