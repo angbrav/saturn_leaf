@@ -60,7 +60,8 @@ handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
     Group0 = lists:seq(0, NLeaves-1),
     Group1 = lists:delete(MyId, Group0),
     Convergers1 = lists:foldl(fun(Id, Acc) ->
-                                {ok, Receivers} = saturn_leaf_receiver:get_receivers(Id),
+      lager:info("GetReceivers ~p",[reg_name(Id)]),
+      {ok, Receivers} = saturn_leaf_receiver:get_receivers(Id),
                                 dict:store(Id, Receivers, Acc)
                               end, dict:new(), Group1),
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
