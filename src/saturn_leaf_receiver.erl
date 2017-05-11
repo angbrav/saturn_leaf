@@ -53,6 +53,7 @@ init([MyId]) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
     Nodes = riak_core_ring:all_members(Ring),
     Convergers = [{saturn_data_receiver, Node} || Node <- Nodes],
+    lager:info("Initialized receiver ~p",[reg_name(MyId)]),
     {ok, #state{myid=MyId, nodes=Convergers}}.
 
 handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
