@@ -79,7 +79,8 @@ handle_call({assign_convergers, NLeaves}, _From, S0=#state{myid=MyId}) ->
     {reply, ok, S0#state{scattered_receivers=Dict}};
 
 handle_call(get_receivers, _From, S0=#state{nodes=Nodes}) ->
-    {reply, {ok, Nodes}, S0}.
+  lager:info("received getreceivers"),
+  {reply, {ok, Nodes}, S0}.
 
 handle_cast(_Info, State) ->
     {noreply, State}.
