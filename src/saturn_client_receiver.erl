@@ -49,6 +49,7 @@ init([]) ->
     {ok, nostate}.
 
 handle_call({read, BKey, Clock}, From, S0) ->
+    lager:info("Received read to key: ~p from client ~p", [BKey, From]),
     saturn_leaf:async_read(BKey, Clock, From),
     {noreply, S0};
 
