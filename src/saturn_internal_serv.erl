@@ -199,7 +199,7 @@ propagate_stream(_Node, [], _MyId, _NLeaves) ->
     done;
 
 propagate_stream(Node, Stream, MyId, NLeaves) ->
-    %lager:info("Stream to propagate to ~p: ~p", [Node, Stream]),
+    lager:info("Stream to propagate to ~p: ~p", [Node, Stream]),
     case groups_manager:is_leaf(Node, NLeaves) of
         true ->
             saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
