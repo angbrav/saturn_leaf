@@ -195,6 +195,7 @@ propagate_stream(FinalStream, MyId, Manager) ->
         {ok, _, no_indexnode} ->
             noop;
         {ok, Stream, Id} ->
+            lager:info("Propagating stream to: ~p", [Id]),
             saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
     end.
 
