@@ -89,6 +89,7 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0}) 
     {noreply, S0#state{vclock=VClock1}};
 
 handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, delay=Delay}) ->
+    lager:info("New Label"),
     TimeStamp = Label#label.timestamp,
     case IsUpdate of
         true ->
