@@ -54,6 +54,7 @@ handle_call({read, BKey, Clock}, From, S0) ->
     {noreply, S0};
 
 handle_call({update, BKey, Value, Clock}, From, S0) ->
+    lager:info("Received write to key: ~p, value: ~p from client ~p", [BKey, Value, From]),
     saturn_leaf:async_update(BKey, Value, Clock, From),
     {noreply, S0}.
 

@@ -70,6 +70,7 @@ init([MyId]) ->
     {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager}}.
 
 handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager}) ->
+    lager:info("Received stream: ~p from ~p", [Stream, IdSender]),
     Paths = Manager#state_manager.paths,
     Groups = Manager#state_manager.groups,
     NLeaves = Manager#state_manager.nleaves,

@@ -63,7 +63,7 @@ handle_cast(completed, S0=#state{labels_queue=Labels0}) ->
     {noreply, S0#state{labels_queue=Labels2}};
     
 handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0}) ->
-    %lager:info("New stream received. Label: ~p", Stream),
+    lager:info("New stream received. Label: ~p", Stream),
     Empty = ets_queue:is_empty(Labels0),
     Labels1 = lists:foldl(fun(Label, Queue) ->
                             ets_queue:in(Label, Queue)
