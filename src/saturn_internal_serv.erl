@@ -69,8 +69,12 @@ init([MyId]) ->
                           end, dict:new(), dict:to_list(Delays0)),
     {ok, #state{queues=Queues, myid=MyId, busy=Busy, delays=Delays1, manager=Manager}}.
 
-handle_cast({new_stream, Stream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager}) ->
-    lager:info("Received stream: ~p from ~p", [Stream, IdSender]),
+handle_cast({new_stream, TaggedStream, IdSender}, S0=#state{queues=Queues0, busy=Busy0, delays=Delays, myid=MyId, manager=Manager}) ->
+    lager:info("Received stream from ~p: ~p [Tagged]", [IdSender, TaggedStream]),
+    Stream = lists:map(
+        fun({Label,_}) -> Label end,
+        TaggedStream),
+    lager:info("Received stream from ~p: ~p ", [IdSender, Stream]),
     Paths = Manager#state_manager.paths,
     Groups = Manager#state_manager.groups,
     NLeaves = Manager#state_manager.nleaves,
@@ -201,9 +205,16 @@ propagate_stream(_Node, [], _MyId, _NLeaves) ->
 
 propagate_stream(Node, Stream, MyId, NLeaves) ->
     lager:info("Stream to propagate to ~p: ~p", [Node, Stream]),
-    case groups_manager:is_leaf(Node, NLeaves) of
+
+  TaggedStream = case is_list(Stream) of
+                   true -> [{Label,myawesometag} || Label <- Stream];
+                   false -> lol
+                 end,
+  lager:info("Stream to propagate to ~p: ~p [Tagged]", [Node, TaggedStream]),
+
+  case groups_manager:is_leaf(Node, NLeaves) of
         true ->
-            saturn_leaf_converger:handle(Node, {new_stream, Stream, MyId});
+            saturn_leaf_converger:handle(Node, {new_stream, TaggedStream, MyId});
         false ->
-            saturn_internal_serv:handle(Node, {new_stream, Stream, MyId})
+            saturn_internal_serv:handle(Node, {new_stream, TaggedStream, MyId})
     end.

@@ -195,9 +195,14 @@ propagate_stream(FinalStream, MyId, Manager) ->
         {ok, _, no_indexnode} ->
             noop;
         {ok, Stream, Id} ->
+            TaggedStream = case is_list(Stream) of
+                true -> [{Label,myawesometag} || Label <- Stream];
+                false -> lol
+            end,
             lager:info("Propagating stream to ~p: ~p", [Id, Stream]),
-            saturn_internal_serv:handle(Id, {new_stream, Stream, MyId})
-    end.
+            saturn_internal_serv:handle(Id, {new_stream, TaggedStream, MyId}),
+            lager:info("Propagating stream to ~p: ~p [Tagged]", [Id, TaggedStream])
+end.
 
 -ifdef(TEST).
 

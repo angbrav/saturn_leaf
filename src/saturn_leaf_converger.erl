@@ -62,8 +62,12 @@ handle_cast(completed, S0=#state{labels_queue=Labels0}) ->
     Labels2 =  handle_label(ets_queue:peek(Labels1), Labels1),
     {noreply, S0#state{labels_queue=Labels2}};
     
-handle_cast({new_stream, Stream, _SenderId}, S0=#state{labels_queue=Labels0}) ->
-    lager:info("New stream received. Label: ~p", Stream),
+handle_cast({new_stream, TaggedStream, _SenderId}, S0=#state{labels_queue=Labels0}) ->
+    lager:info("New stream received from ~p: ~p [Tagged]", [_SenderId, TaggedStream]),
+    Stream = lists:map(
+        fun({Label,_}) -> Label end,
+        TaggedStream),
+    lager:info("New stream received from ~p: ~p", [_SenderId, Stream]),
     Empty = ets_queue:is_empty(Labels0),
     Labels1 = lists:foldl(fun(Label, Queue) ->
                             ets_queue:in(Label, Queue)
