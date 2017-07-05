@@ -66,7 +66,7 @@ init([MyId, NLeaves]) ->
                             dict:store(Id, 0, Acc)
                          end, dict:new(), Idle1),
     Pendings1 = lists:foldl(fun(Entry, Acc) ->
-                                Name = list_to_atom(node() ++ integer_to_list(Entry) ++  atom_to_list(eunomiakv_pops)),
+                                Name = list_to_atom(integer_to_list(Entry) ++  atom_to_list(eunomiakv_pops) ++ integer_to_list(MyId)),
                                 dict:store(Entry, ets_queue:new(Name), Acc)
                             end, dict:new(), Idle1),
     erlang:send_after(10, self(), deliver),
