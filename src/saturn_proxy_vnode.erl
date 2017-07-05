@@ -246,12 +246,11 @@ handle_command({data, Id, BKey, Value}, _From, S0=#state{data=Data,
                                                          myid=MyId,
                                                          staleness=Staleness0}) ->
 
-    case Pending of
-        {Id, Sender} ->
-            {TimeStamp, _} = Id,
+    case dict:find(Id, Pending) of
+        {Sender, TimeStamp} ->
             {Connector1, Staleness1} = do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0),
-            {noreply, S0#state{connector=Connector1, staleness=Staleness1, pending=none}};
-        _ ->
+            {noreply, S0#state{connector=Connector1, staleness=Staleness1, pending=dict:erase(Id, Pending)}};
+        error ->
             true = ets:insert(Data, {Id, {BKey, Value}}),
             {noreply, S0}
     end;
@@ -288,12 +287,13 @@ handle_command({async_update, BKey, Value, Clock, Client}, _From, S0) ->
     gen_server:reply(Client, {ok, TimeStamp}),
     {noreply, S1};
 
-handle_command({propagate, TimeStamp, Node, Sender}, _From, S0=#state{connector=Connector0, myid=MyId, data=Data, staleness=Staleness0}) ->
-    Id = {TimeStamp, Node},
+handle_command({propagate, TimeStamp, Node, Sender}, _From, S0=#state{connector=Connector0, myid=MyId, data=Data, staleness=Staleness0, pending=Pending}) ->
+    Id = {dict:fetch(Sender, TimeStamp), Node},
     case ets:lookup(Data, Id) of
         [] ->
-            {noreply, S0#state{pending={Id, Sender}}};
+            {noreply, S0#state{pending=dict:store(Id, {Sender, TimeStamp}, Pending)}};
         [{Id, {BKey, Value}}] ->
+            true = ets:delete(Data, Id),
             {Connector1, Staleness1} = do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0), 
             {noreply, S0#state{connector=Connector1, staleness=Staleness1}}
     end;
@@ -301,7 +301,7 @@ handle_command({propagate, TimeStamp, Node, Sender}, _From, S0=#state{connector=
 handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, partition=Partition, connector=Connector, staleness=Staleness}) ->
     Sender = Label#label.sender,
     Clock = Label#label.timestamp,
-    Staleness1 = ?STALENESS:add_remote(Staleness, Sender, Clock),
+    Staleness1 = ?STALENESS:add_remote(Staleness, Sender, dict:fetch(Sender, Clock)),
     BKeyToRead = Label#label.bkey,
     {ok, {Value, _Clock}} = ?BACKEND_CONNECTOR:read(Connector, {BKeyToRead}),
     PhysicalClock = saturn_utilities:now_microsec(),
@@ -309,7 +309,7 @@ handle_command({remote_read, Label}, _From, S0=#state{max_ts=MaxTS0, myid=MyId, 
     Payload = Label#label.payload,
     Client = Payload#payload_remote.client,
     Type = Payload#payload_remote.type_call,
-    NewLabel = create_label(remote_reply, {routing, routing}, TimeStamp, {Partition, node()}, MyId, #payload_reply{value=Value, to=Sender, client=Client, type_call=Type}),
+    NewLabel = create_label(remote_reply, {routing, routing}, dict:store(MyId, TimeStamp, Clock), {Partition, node()}, MyId, #payload_reply{value=Value, to=Sender, client=Client, type_call=Type}),
     saturn_leaf_producer:new_label(MyId, NewLabel, Partition, false),
     {noreply, S0#state{max_ts=TimeStamp, last_label=NewLabel, staleness=Staleness1}};
 
@@ -387,8 +387,10 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=P
         {ok, Id} ->
             %Remote read
             PhysicalClock = saturn_utilities:now_microsec(),
-            TimeStamp = max(Clock, max(PhysicalClock, MaxTS0)),
-            Label = create_label(remote_read, BKey, TimeStamp, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=Type}),
+            ClockEntry = dict:fetch(MyId, Clock),
+            TimeStamp = max(ClockEntry, max(PhysicalClock, MaxTS0)),
+            TimeStampVector = dict:store(MyId, TimeStamp, Clock),
+            Label = create_label(remote_read, BKey, TimeStampVector, {Partition, node()}, MyId, #payload_remote{to=Id, client=From, type_call=Type}),
             saturn_leaf_producer:new_label(MyId, Label, Partition, false),    
             {remote, S0#state{max_ts=TimeStamp, last_label=Label}};
         {error, Reason} ->
@@ -398,10 +400,12 @@ do_read(Type, BKey, Clock, From, S0=#state{myid=MyId, max_ts=MaxTS0, partition=P
     
 do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid=MyId, connector=Connector0, manager=Manager, receivers=Receivers}) ->
     PhysicalClock = saturn_utilities:now_microsec(),
-    TimeStamp = max(Clock+1, max(PhysicalClock, MaxTS0+1)),
+    ClockEntry = dict:fetch(MyId, Clock),
+    TimeStamp = max(ClockEntry+1, max(PhysicalClock, MaxTS0+1)),
+    TimeStampVector = dict:store(MyId, TimeStamp, Clock),
     S1 = case groups_manager:do_replicate(BKey, Manager#state_manager.groups, MyId) of
         true ->
-            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
+            {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStampVector}),
             S0#state{connector=Connector1};
         false ->
             S0;
@@ -409,40 +413,48 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
             lager:error("BKey ~p ~p in the dictionary",  [BKey, Reason1]),
             S0
     end,
-    Label = create_label(update, BKey, TimeStamp, {Partition, node()}, MyId, {}),
+    Label = create_label(update, BKey, TimeStampVector, {Partition, node()}, MyId, {}),
     saturn_leaf_producer:new_label(MyId, Label, Partition, true),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
                             UId = {TimeStamp, {Partition, node()}},
-                            {From, To, Delay} = ?FROM_TO_DELAY,
-                            case ((From == MyId) and (To == Id)) or ((From == Id) and (To == MyId)) of
-                                true ->
-                                    case Delay == 0 of
-                                        true ->
-                                            saturn_data_receiver:data(Receiver, UId, BKey, Value);
-                                        false ->
-                                            riak_core_vnode:send_command_after(Delay, {pending_send, Receiver, UId, BKey, Value})
-                                    end;
-                                false ->
-                                    saturn_data_receiver:data(Receiver, UId, BKey, Value)
-                            end
+                            saturn_data_receiver:data(Receiver, UId, BKey, Value)
                           end, Group);
         {error, Reason2} ->
             lager:error("No replication group for bkey: ~p (~p)", [BKey, Reason2])
     end,
-    {{ok, TimeStamp}, S1#state{max_ts=TimeStamp, last_label=Label}}.
+    {{ok, TimeStampVector}, S1#state{max_ts=TimeStamp, last_label=Label}}.
 
 do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0) ->
-    Staleness1 = ?STALENESS:add_update(Staleness0, Sender, TimeStamp),
-    {ok, {_, Clock}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
-    case (Clock<TimeStamp) of
+    Time = dict:fetch(Sender, TimeStamp),
+    Staleness1 = ?STALENESS:add_update(Staleness0, Sender, Time),
+    {ok, {_, Version}} = ?BACKEND_CONNECTOR:read(Connector0, {BKey}),
+    case is_greater(dict:to_list(TimeStamp), Version, false) of
         true ->
             {ok, Connector1} = ?BACKEND_CONNECTOR:update(Connector0, {BKey, Value, TimeStamp}),
-            saturn_leaf_converger:handle(MyId, completed),
+            saturn_leaf_converger:handle(MyId, {completed, Sender, Time}),
             {Connector1, Staleness1};
         false ->
-            saturn_leaf_converger:handle(MyId, completed),
+            saturn_leaf_converger:handle(MyId, {completed, Sender, Time}),
             {Connector0, Staleness1}
+    end.
+
+%Is the first vector greater than the second?
+is_greater([], _TimeStamp, Greater) ->
+    Greater;
+
+is_greater([{Entry, Time}|Rest], TimeStamp, Greater) ->
+    Clock =  dict:fetch(Entry, TimeStamp),
+    case Time > Clock of
+        true ->
+            is_greater(Rest, TimeStamp, true);
+        false ->
+            case Time = Clock of
+                true ->
+                    is_greater(Rest, TimeStamp, Greater);
+                false ->
+                    false
+            end
     end.

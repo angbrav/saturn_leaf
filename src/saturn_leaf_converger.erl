@@ -36,9 +36,9 @@
          heartbeat/3,
          clean_state/1]).
 
--record(state, {labels,
+-record(state, {pendings,
                 vclock :: dict(),
-                busy,
+                idle,
                 myid}).
                
 reg_name(MyId) ->  list_to_atom(integer_to_list(MyId) ++ atom_to_list(?MODULE)). 
@@ -53,60 +53,76 @@ handle(MyId, Message) ->
 label(MyId, Label) ->
     gen_server:cast({global, reg_name(MyId)}, {label, Label}).
 
-heartbeat(MyId, Time, Sender) ->
-    gen_server:cast({global, reg_name(MyId)}, {heartbeat, Time, Sender}).
-
 clean_state(MyId) ->
     gen_server:call({global, reg_name(MyId)}, clean_state, infinity).
 
+heartbeat(MyId, Time, Sender) ->
+    gen_server:cast({global, reg_name(MyId)}, {heartbeat, Time, Sender}).
+
 init([MyId, NLeaves]) ->
+    Idle0 = lists:seq(0, NLeaves - 1),
+    Idle1 = lists:delete(MyId, Idle0),
     VClock = lists:foldl(fun(Id, Acc) ->
                             dict:store(Id, 0, Acc)
-                         end, dict:new(), lists:seq(0, NLeaves-1)),
-    Labels = ets:new(labels_converger, [ordered_set, named_table, private]),
+                         end, dict:new(), Idle1),
+    Pendings1 = lists:foldl(fun(Entry, Acc) ->
+                                Name = list_to_atom(node() ++ integer_to_list(Entry) ++  atom_to_list(eunomiakv_pops)),
+                                dict:store(Entry, ets_queue:new(Name), Acc)
+                            end, dict:new(), Idle1),
     erlang:send_after(10, self(), deliver),
-    {ok, #state{labels=Labels,
+    {ok, #state{pendings=Pendings1,
                 myid=MyId,
-                busy=false,
+                idle=Idle1,
                 vclock=VClock}}.
 
-handle_call(clean_state, _From, S0=#state{labels=Labels0, vclock=VClock0}) ->
-    true = ets:delete(Labels0),
-    Labels1 = ets:new(labels_converger, [ordered_set, named_table, private]),
+handle_call(clean_state, _From, S0=#state{pendings=Pendings0, vclock=VClock0}) ->
+    Pendings1 = lists:foldl(fun({Entry, Queue}, Acc) ->
+                                dict:store(Entry, ets_queue:clean(Queue), Acc)
+                            end, dict:new(), dict:to_list(Pendings0)),
     VClock1 = lists:foldl(fun(Id, Acc) ->
                             dict:store(Id, 0, Acc)
                           end, dict:new(), dict:fetch_keys(VClock0)),
-    {reply, ok, S0#state{labels=Labels1, vclock=VClock1, busy=false}}.
+    Idle1 = dict:fetch_keys(VClock0),
+    {reply, ok, S0#state{pendings=Pendings1, vclock=VClock1, idle=Idle1}}.
 
-handle_cast({heartbeat, Time, Sender}, S0=#state{vclock=VClock0}) ->
-    VClock1 = dict:store(Sender, Time, VClock0),
-    {noreply, S0#state{vclock=VClock1}};
+handle_cast({completed, Sender, Clock}, S0=#state{vclock=VClock0, idle=Idle0}) ->
+    VClock1 = dict:store(Sender, Clock, VClock0),
+    {noreply, S0#state{vclock=VClock1, idle=[Sender|Idle0]}};
 
-handle_cast(completed, S0) ->
-    {noreply, S0#state{busy=false}};
+
+handle_cast({heartbeat, Time, Sender}, S0=#state{pendings=Pendings0}) ->
+    Queue0 = dict:fetch(Sender, Pendings0),
+    Queue1 = ets_queue:in({Time, Sender, heartbeat}, Queue0),
+    Pendings1 = dict:store(Sender, Queue1, Pendings0),
+    {noreply, S0#state{pendings=Pendings1}};
     
-handle_cast({label, Label}, S0=#state{vclock=VClock0, labels=Labels}) ->
+handle_cast({label, Label}, S0=#state{pendings=Pendings0}) ->
     TimeStamp = Label#label.timestamp,
-    Node = Label#label.node,
     Sender = Label#label.sender,
-    ets:insert(Labels, {{TimeStamp, Sender, Node, Label}, in}),
-    VClock1 = dict:store(Sender, TimeStamp, VClock0),
-    {noreply, S0#state{vclock=VClock1}};
+    Queue0 = dict:fetch(Sender, Pendings0),
+    Queue1 = ets_queue:in({TimeStamp, Sender, Label}, Queue0),
+    Pendings1 = dict:store(Sender, Queue1, Pendings0),
+    {noreply, S0#state{
+                       %vclock=VClock1i,
+                        pendings=Pendings1}};
 
 handle_cast(_Info, State) ->
     {noreply, State}.
 
-handle_info(deliver, S0=#state{labels=Labels, vclock=VClock0, busy=Busy}) ->
-    StableTime1 = compute_stable(VClock0),
-    case Busy of
-        true ->
-            erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
-            {noreply, S0};
-        false ->
-            {ok, Busy1} = deliver_labels(Labels, StableTime1),
-            erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
-            {noreply, S0#state{busy=Busy1}}
-    end;
+handle_info(deliver, S0=#state{pendings=Pendings0, vclock=VClock0, idle=Idle0}) ->
+    {Idle1, VClock1, Pendings1} = lists:foldl(fun(Entry, {I, V0, P0}) ->
+                                                Q0 = dict:fetch(Entry, Pendings0),
+                                                case deliver_labels(Q0, V0) of
+                                                    {ok, {false, V1, Q1}} ->
+                                                        P1 = dict:store(Entry, Q1, P0),
+                                                        {[Entry|I], V1, P1};
+                                                    {ok, {true, V1, Q1}} ->
+                                                        P1 = dict:store(Entry, Q1, P0),
+                                                        {I, V1, P1}
+                                                end
+                                              end, {[], VClock0, Pendings0}, Idle0),
+    erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
+    {noreply, S0#state{vclock=VClock1, idle=Idle1, pendings=Pendings1}};
 
 handle_info(_Info, State) ->
     {noreply, State}.
@@ -117,53 +133,74 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-compute_stable(VClock) ->
-    lists:foldl(fun({_Id, Clock}, Min) ->
-                    min(Clock, Min)
-                 end, infinity, dict:to_list(VClock)).
-
-deliver_labels(Labels, StableTime) ->
-    case ets:first(Labels) of
-        '$end_of_table' ->
-            {ok, false};
-        {TimeStamp, _Sender, _Node, Label}=Key when TimeStamp =< StableTime ->
-            true = ets:delete(Labels, Key),
-            case Label#label.operation of
-                remote_read ->
-                    BKey = Label#label.bkey,
-                    DocIdx = riak_core_util:chash_key(BKey),
-                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-                    [{IndexNode, _Type}] = PrefList,
-                    saturn_proxy_vnode:remote_read(IndexNode, Label),
-                    deliver_labels(Labels, StableTime);
-                remote_reply ->
-                    Payload = Label#label.payload,
-                    _Client = Payload#payload_reply.client,
-                    _Value = Payload#payload_reply.value,
-                    case Payload#payload_reply.type_call of
-                    sync ->
-                        noop;
-                        %riak_core_vnode:reply(Client, {ok, {Value, 0}});
-                    async ->
-                        %gen_server:reply(Client, {ok, {Value, 0}})
-                        noop
-                    end,
-                    deliver_labels(Labels, StableTime);
-                update ->
-                    BKey = Label#label.bkey,
-                    Clock = Label#label.timestamp,
-                    Node = Label#label.node,
-                    Sender = Label#label.sender,
-                    DocIdx = riak_core_util:chash_key(BKey),
-                    PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
-                    [{IndexNode, _Type}] = PrefList,
-                    saturn_proxy_vnode:propagate(IndexNode, Clock, Node, Sender),
-                    {ok, true}
-            end;
-        _Key ->
-            {ok, false}
+deliver_labels(Queue, VClock0) ->
+    case ets_queue:peek(Queue) of
+        empty ->
+            {ok, {true, VClock0, Queue}};
+        {value, {TimeStamp, Sender, heartbeat}}  -> 
+            VClock1 = dict:store(Sender, TimeStamp, VClock0),
+            {{value, _}, Queue1} = ets_queue:out(Queue),
+            deliver_labels(Queue1, VClock1);
+        {value, {TimeStamp, Sender, Label}} ->
+            case stable(dict:to_list(VClock0), TimeStamp, Sender) of
+                true ->
+                    {{value, _}, Queue1} = ets_queue:out(Queue),
+                    case Label#label.operation of
+                        remote_read ->
+                            BKey = Label#label.bkey,
+                            DocIdx = riak_core_util:chash_key(BKey),
+                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+                            [{IndexNode, _Type}] = PrefList,
+                            saturn_proxy_vnode:remote_read(IndexNode, Label),
+                            Clock = dict:fetch(Sender, TimeStamp),
+                            VClock1 = dict:store(Sender, Clock, VClock0),
+                            deliver_labels(Queue1, VClock1);
+                        remote_reply ->
+                            Payload = Label#label.payload,
+                            _Client = Payload#payload_reply.client,
+                            _Value = Payload#payload_reply.value,
+                            case Payload#payload_reply.type_call of
+                            sync ->
+                                noop;
+                                %riak_core_vnode:reply(Client, {ok, {Value, 0}});
+                            async ->
+                                %gen_server:reply(Client, {ok, {Value, 0}})
+                                noop
+                            end,
+                            Clock = dict:fetch(Sender, TimeStamp),
+                            VClock1 = dict:store(Sender, Clock, VClock0),
+                            deliver_labels(Queue1, VClock1);
+                        update ->
+                            BKey = Label#label.bkey,
+                            Clock = Label#label.timestamp,
+                            Node = Label#label.node,
+                            Sender = Label#label.sender,
+                            DocIdx = riak_core_util:chash_key(BKey),
+                            PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
+                            [{IndexNode, _Type}] = PrefList,
+                            saturn_proxy_vnode:propagate(IndexNode, Clock, Node, Sender),
+                            {ok, {false, VClock0, Queue1}}
+                    end;
+                false ->
+                    {ok, {true, VClock0, Queue}}
+            end
     end.
 
+stable([], _TimeStamp, _Sender) ->
+    true;
+
+stable([{Sender, _Clock}|Rest], TimeStamp, Sender) ->
+    stable(Rest, TimeStamp, Sender);
+
+stable([{Entry, Stable}|Rest], TimeStamp, Sender) ->
+    Clock =  dict:fetch(Entry, TimeStamp),
+    case Stable >= Clock of
+        true ->
+            stable(Rest, TimeStamp, Sender);
+        false ->
+            false
+    end.
+                         
 -ifdef(TEST).
 
 -endif.

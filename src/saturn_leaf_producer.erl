@@ -91,8 +91,8 @@ handle_cast({partition_heartbeat, Partition, Clock}, S0=#state{vclock=VClock0}) 
     VClock1 = dict:store(Partition, Clock, VClock0),
     {noreply, S0#state{vclock=VClock1}};
 
-handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, delay=Delay}) ->
-    TimeStamp = Label#label.timestamp,
+handle_cast({new_label, Label, Partition, IsUpdate}, S0=#state{labels=Labels, vclock=VClock0, delay=Delay, myid=MyId}) ->
+    TimeStamp = dict:fetch(MyId, Label#label.timestamp),
     case IsUpdate of
         true ->
             Now = saturn_utilities:now_microsec(),
@@ -188,7 +188,8 @@ deliver_labels(Labels, StableTime, MyId, Manager, VVRemote) ->
     end.
 
 handle_label(Label, Manager, MyId, VVRemote) ->
-    TimeStamp = Label#label.timestamp,
+    TimeStamp = dict:fetch(MyId, Label#label.timestamp),
+    %TimeStamp = Label#label.timestamp,
     case Label#label.operation of
         update ->
             BKey = Label#label.bkey,
