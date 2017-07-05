@@ -33,7 +33,7 @@
                  ]},
   {mod, { saturn_leaf_app, []}},
   {env, [{riak_node, '127.0.0.1'},
-         {tree, "data/manager/tree.saturn"},
-         {groups, "data/manager/groups.saturn"},
+         {tree, "data/manager/four_tree.saturn"},
+         {groups, "data/manager/four_groups.saturn"},
          {riak_port, 7878}]}
  ]}.
