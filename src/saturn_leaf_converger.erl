@@ -62,6 +62,7 @@ heartbeat(MyId, Time, Sender) ->
 init([MyId, NLeaves]) ->
     Idle0 = lists:seq(0, NLeaves - 1),
     Idle1 = lists:delete(MyId, Idle0),
+    lager:info("I am ~p, and my vector contains ~p",[MyId, Idle1]),
     VClock = lists:foldl(fun(Id, Acc) ->
                             dict:store(Id, 0, Acc)
                          end, dict:new(), Idle1),
@@ -91,6 +92,7 @@ handle_cast({completed, Sender, Clock}, S0=#state{vclock=VClock0, idle=Idle0}) -
 
 
 handle_cast({heartbeat, Time, Sender}, S0=#state{pendings=Pendings0}) ->
+    lager:info("heartbeat from ~p", [Sender]),
     Queue0 = dict:fetch(Sender, Pendings0),
     Queue1 = ets_queue:in({Time, Sender, heartbeat}, Queue0),
     Pendings1 = dict:store(Sender, Queue1, Pendings0),
