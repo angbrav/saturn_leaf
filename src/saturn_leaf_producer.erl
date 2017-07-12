@@ -78,9 +78,10 @@ init([MyId, NLeaves]) ->
                         saturn_proxy_vnode:heartbeat(PrefList),
                         dict:store(Partition, 0, Acc)
                        end, dict:new(), GrossPrefLists),
+    RemoteIds = lists:delete(MyId, lists:seq(0, NLeaves-1)),
     VVRemote = lists:foldl(fun(Id, Acc) ->
                             dict:store(Id, 0, Acc)
-                           end, dict:new(), lists:seq(0, NLeaves-1)),
+                           end, dict:new(), RemoteIds),
     Labels = ets:new(labels_producer, [ordered_set, named_table, private]),
     erlang:send_after(10, self(), deliver),
     %{ok, Delay} = groups_manager:get_delay_leaf(Manager#state_manager.tree, MyId, Manager#state_manager.nleaves),
