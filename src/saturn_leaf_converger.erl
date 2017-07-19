@@ -92,7 +92,6 @@ handle_cast({completed, Sender, Clock}, S0=#state{vclock=VClock0, idle=Idle0}) -
 
 
 handle_cast({heartbeat, Time, Sender}, S0=#state{pendings=Pendings0}) ->
-    lager:info("heartbeat from ~p", [Sender]),
     Queue0 = dict:fetch(Sender, Pendings0),
     Queue1 = ets_queue:in({Time, Sender, heartbeat}, Queue0),
     Pendings1 = dict:store(Sender, Queue1, Pendings0),
@@ -124,6 +123,7 @@ handle_info(deliver, S0=#state{pendings=Pendings0, vclock=VClock0, idle=Idle0}) 
                                                 end
                                               end, {[], VClock0, Pendings0}, Idle0),
     erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
+    lager:info("my vector contains ~p",[VClock1]),
     {noreply, S0#state{vclock=VClock1, idle=Idle1, pendings=Pendings1}};
 
 handle_info(_Info, State) ->
