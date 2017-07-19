@@ -124,7 +124,7 @@ handle_info(deliver, S0=#state{pendings=Pendings0, vclock=VClock0, idle=Idle0}) 
                                                 end
                                               end, {[], VClock0, Pendings0}, Idle0),
     %lager:info("stable time ~p",[compute_stable(VClock1)]),
-    erlang:send_after(?STABILIZATION_FREQ, self(), deliver),
+    erlang:send_after(?STABILIZATION_FREQ_CONVERGER, self(), deliver),
     {noreply, S0#state{vclock=VClock1, idle=Idle1, pendings=Pendings1}};
 
 handle_info(_Info, State) ->
