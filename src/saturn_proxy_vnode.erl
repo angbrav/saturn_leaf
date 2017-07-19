@@ -178,7 +178,7 @@ init([Partition]) ->
                 last_label=none,
                 connector=Connector,
                 data=Data,
-                pending=none,
+                pending=dict:new(),
                 staleness=Staleness,
                 manager=Manager}}.
 
@@ -222,7 +222,7 @@ handle_command(clean_state, _Sender, S0=#state{connector=Connector0, partition=P
     Staleness1 = ?STALENESS:clean(Staleness0, Name),
     {reply, ok, S0#state{max_ts=0,
                          last_label=none,
-                         pending=none,
+                         pending=dict:new(),
                          staleness=Staleness1,
                          connector=Connector1}};
 
