@@ -117,12 +117,13 @@ handle_info(deliver, S0=#state{pendings=Pendings0, vclock=VClock0, idle=Idle0}) 
                                                 case deliver_labels(Q0, V0) of
                                                     {ok, {false, V1, Q1}} ->
                                                         P1 = dict:store(Entry, Q1, P0),
-                                                        {[Entry|I], V1, P1};
+                                                        {I, V1, P1};
                                                     {ok, {true, V1, Q1}} ->
                                                         P1 = dict:store(Entry, Q1, P0),
-                                                        {I, V1, P1}
+                                                        {[Entry|I], V1, P1}
                                                 end
                                               end, {[], VClock0, Pendings0}, Idle0),
+    lager:info("my vector contains ~p",[dict:to_list(VClock1)]),
     erlang:send_after(?STABILIZATION_FREQ_CONVERGER, self(), deliver),
     {noreply, S0#state{vclock=VClock1, idle=Idle1, pendings=Pendings1}};
 
@@ -142,7 +143,6 @@ deliver_labels(Queue, VClock0) ->
         {value, {TimeStamp, Sender, heartbeat}}  -> 
             VClock1 = dict:store(Sender, TimeStamp, VClock0),
             {{value, _}, Queue1} = ets_queue:out(Queue),
-            lager:info("my vector contains ~p",[dict:to_list(VClock1)]),
             deliver_labels(Queue1, VClock1);
         {value, {TimeStamp, Sender, Label}} ->
             case stable(dict:to_list(VClock0), TimeStamp, Sender) of
