@@ -454,7 +454,7 @@ is_greater([{Entry, Time}|Rest], TimeStamp, Greater) ->
         true ->
             is_greater(Rest, TimeStamp, true);
         false ->
-            case Time = Clock of
+            case Time == Clock of
                 true ->
                     is_greater(Rest, TimeStamp, Greater);
                 false ->
