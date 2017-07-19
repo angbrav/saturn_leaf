@@ -186,6 +186,7 @@ deliver_labels(Queue, VClock0) ->
                             PrefList = riak_core_apl:get_primary_apl(DocIdx, 1, ?PROXY_SERVICE),
                             [{IndexNode, _Type}] = PrefList,
                             saturn_proxy_vnode:propagate(IndexNode, Clock, Node, Sender),
+                            lager:info("Sent update with ts: ~p",[Clock]),
                             {ok, {false, VClock0, Queue1}}
                     end;
                 false ->
