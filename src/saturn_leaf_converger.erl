@@ -92,6 +92,7 @@ handle_cast({completed, Sender, Clock}, S0=#state{vclock=VClock0, idle=Idle0}) -
 
 
 handle_cast({heartbeat, Time, Sender}, S0=#state{pendings=Pendings0}) ->
+    lager:info("Received heartbeat from ~p with clock ~p", [Sender, Time]),
     Queue0 = dict:fetch(Sender, Pendings0),
     Queue1 = ets_queue:in({Time, Sender, heartbeat}, Queue0),
     Pendings1 = dict:store(Sender, Queue1, Pendings0),
