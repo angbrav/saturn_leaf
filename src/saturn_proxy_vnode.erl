@@ -442,6 +442,9 @@ do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0) -
     end.
 
 %Is the first vector greater than the second?
+is_greater(_, 0, _Greater) ->
+    true;
+
 is_greater([], _TimeStamp, Greater) ->
     Greater;
 
