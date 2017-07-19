@@ -28,7 +28,7 @@
 -define(HEARTBEAT_FREQ, 2).
 -define(INTER_HEARTBEAT_FREQ, 5).
 -define(STABILIZATION_FREQ, 1).
--define(STABILIZATION_FREQ_CONVERGER, 1000).
+-define(STABILIZATION_FREQ_CONVERGER, 1).
 
 %-define(PROPAGATION_MODE, naive_erlang).
 -define(PROPAGATION_MODE, bypass_tree).

@@ -248,6 +248,8 @@ handle_command({data, Id, BKey, Value}, _From, S0=#state{data=Data,
 
     case dict:find(Id, Pending) of
         {Sender, TimeStamp} ->
+            lager:info("Timestamp is ~p", [TimeStamp]),
+            lager:info("Timestamp to_list is ~p", [dict:to_list(TimeStamp)]),
             {Connector1, Staleness1} = do_remote_update(BKey, Value, TimeStamp, Sender, MyId, Connector0, Staleness0),
             {noreply, S0#state{connector=Connector1, staleness=Staleness1, pending=dict:erase(Id, Pending)}};
         error ->
