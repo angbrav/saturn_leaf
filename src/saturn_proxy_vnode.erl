@@ -409,6 +409,7 @@ do_update(BKey, Value, Clock, S0=#state{max_ts=MaxTS0, partition=Partition, myid
     saturn_leaf_producer:new_label(MyId, Label, Partition, true),
     case groups_manager:get_datanodes_ids(BKey, Manager#state_manager.groups, MyId) of
         {ok, Group} ->
+            lager:info("Update on key ~p, propagated to: ~p", [BKey, Group]),
             lists:foreach(fun(Id) ->
                             Receiver = dict:fetch(Id, Receivers),
                             UId = {TimeStamp, {Partition, node()}},
