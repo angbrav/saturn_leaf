@@ -33,7 +33,7 @@
                  ]},
   {mod, { saturn_leaf_app, []}},
   {env, [{riak_node, '127.0.0.1'},
-         {tree, "data/manager/trees/tree_fourec2.txt"},
-         {groups, "data/manager/buckets/four_leafs_buckets.txt"},
+         {tree, "data/manager/trees/tree_fiveec2_uniform.txt"},
+         {groups, "data/manager/buckets/five_leafs_buckets.txt"},
          {riak_port, 7878}]}
  ]}.
