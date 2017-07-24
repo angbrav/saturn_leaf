@@ -41,6 +41,7 @@ add_remote(Data, Sender, TimeStamp) ->
 
 add_update(Data, Sender, TimeStamp) ->
     Dif = saturn_utilities:now_microsec() - TimeStamp,
+    lager:info("Remote update latency: ~p", [Dif]),
     {IdUp, Updates, IdRem, Remotes, Sum} = Data,
     true = ets:insert(Updates, {IdUp, {Sender, Dif}}),
     {IdUp+1, Updates, IdRem, Remotes, Sum + Dif}.
